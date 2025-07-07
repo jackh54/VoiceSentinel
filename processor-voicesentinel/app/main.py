@@ -540,7 +540,7 @@ async def root(api_key: str = Depends(get_api_key)):
     return {"message": "VoiceSentinel Processor is running"}
 
 @app.get("/health")
-async def health_check(api_key: str = Depends(get_api_key)):
+async def health_check():
     """Detailed health check endpoint"""
     return {
         "service": "VoiceSentinel Processor",

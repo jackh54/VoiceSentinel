@@ -1,0 +1,31 @@
+{
+    "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PTERODACTYL PANEL - PTERODACTYL.IO",
+    "meta": {
+        "version": "PTDL_v2",
+        "update_url": null
+    },
+    "exported_at": "2025-07-07T08:22:55+00:00",
+    "name": "VoiceSentinel Processor",
+    "author": "panda@pandadevv.dev",
+    "description": null,
+    "features": null,
+    "docker_images": {
+        "ghcr.io\/parkervcp\/yolks:python_3.10": "ghcr.io\/parkervcp\/yolks:python_3.10"
+    },
+    "file_denylist": [],
+    "startup": "export TMPDIR=\/home\/container\/tmp && mkdir -p $TMPDIR && python3 -m pip install -r requirements.txt && python3 -m uvicorn app.main:app --host 0.0.0.0 --port {{SERVER_PORT}} --workers 1",
+    "config": {
+        "files": "{}",
+        "startup": "{\r\n    \"done\": \"Uvicorn running\"\r\n}",
+        "logs": "{}",
+        "stop": "^C"
+    },
+    "scripts": {
+        "installation": {
+            "script": "#!\/bin\/bash\r\n\r\n# Update system and install dependencies\r\napt update\r\napt install -y python3 python3-pip python3-venv ffmpeg curl jq unzip\r\n\r\ncd \/mnt\/server\r\n\r\n# Get latest release version\r\nLATEST_RELEASE=$(curl -s https:\/\/api.github.com\/repos\/jackh54\/VoiceSentinel\/releases\/latest | jq -r '.tag_name')\r\necho \"Latest release: ${LATEST_RELEASE}\"\r\n\r\n# Download and extract release\r\necho \"Downloading release...\"\r\nwget -O processor.zip https:\/\/github.com\/jackh54\/VoiceSentinel\/releases\/download\/${LATEST_RELEASE}\/processor-voicesentinel.zip\r\necho \"Extracting files...\"\r\nunzip -o processor.zip\r\necho \"Moving files from nested directory...\"\r\nmv processor-voicesentinel\/* .\r\nrm -rf processor-voicesentinel\r\necho \"Cleaning up...\"\r\nrm processor.zip\r\n\r\n# List contents to verify\r\necho \"Current directory contents:\"\r\nls -la\r\n\r\n# Create and activate virtual environment\r\necho \"Setting up Python virtual environment...\"\r\npython3 -m venv venv\r\nsource venv\/bin\/activate\r\n\r\n# Install Python dependencies\r\necho \"Installing Python dependencies...\"\r\npython3 -m pip install --upgrade pip\r\nif [ -f \"requirements.txt\" ]; then\r\n    python3 -m pip install -r requirements.txt\r\nelse\r\n    echo \"Warning: requirements.txt not found!\"\r\n    ls -la\r\nfi\r\n\r\n# Create default config if it doesn't exist\r\nif [ ! -f \"config.json\" ]; then\r\n    echo \"Creating default config.json...\"\r\n    echo '{\r\n        \"transcriber\": {\r\n            \"type\": \"whisper\",\r\n            \"model_name\": \"${model_name}\",\r\n            \"language\": \"en\"\r\n        },\r\n        \"server\": {\r\n            \"host\": \"0.0.0.0\",\r\n            \"port\": ${server_port},\r\n            \"workers\": ${workers},\r\n            \"auth\": {\r\n                \"api_keys\": [${api_keys}],\r\n                \"rate_limit\": {\r\n                    \"authenticated\": {\r\n                        \"window_seconds\": 60,\r\n                        \"max_requests\": 1000,\r\n                        \"block_duration_seconds\": 300\r\n                    },\r\n                    \"unauthenticated\": {\r\n                        \"window_seconds\": 60,\r\n                        \"max_requests\": 10,\r\n                        \"block_duration_seconds\": 1800\r\n                    }\r\n                }\r\n            }\r\n        },\r\n        \"processing\": {\r\n            \"max_concurrent_jobs\": ${workers},\r\n            \"queue_warning_threshold\": 200,\r\n            \"max_queue_size\": 1000,\r\n            \"processing_timeout_seconds\": 90,\r\n            \"retry_attempts\": 2,\r\n            \"retry_delay_seconds\": 1\r\n        }\r\n    }' > config.json\r\nfi\r\n\r\necho \"Installation complete!\"",
+            "container": "ghcr.io\/parkervcp\/installers:debian",
+            "entrypoint": "bash"
+        }
+    },
+    "variables": []
+}
