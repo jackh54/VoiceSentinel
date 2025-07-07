@@ -1,0 +1,29 @@
+# VoiceSentinel Processor Dependencies - Docker & CPU Optimized
+# Compatible with Docker builds and Ubuntu servers
+
+# Core web framework
+fastapi==0.115.14
+uvicorn[standard]==0.35.0
+pydantic==2.5.0
+
+# Audio processing - CPU optimized (Docker compatible)
+openai-whisper==20250625
+torch==2.7.1
+torchaudio==2.1.1
+
+# Audio handling
+numpy==2.3.1
+scipy==1.11.4
+
+# Optional: Faster CPU processing
+numba==0.61.2
+
+# Development and testing
+pytest==8.4.1
+httpx==0.28.1
+
+# System utilities
+psutil==7.0.0
+
+# Logging and monitoring
+structlog==25.4.0

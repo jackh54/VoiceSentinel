@@ -1,0 +1,86 @@
+version: '3.8'
+
+services:
+  voicesentinel-processor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: voicesentinel-processor
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount config file (optional - for easy configuration changes)
+      - ./config.json:/app/config.json:ro
+      # Mount models directory (for Whisper model caching)
+      - ./models:/app/models
+      # Mount logs directory (optional - for persistent logs)
+      - ./logs:/app/logs
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONDONTWRITEBYTECODE=1
+      - LOG_LEVEL=INFO
+      # CPU optimization for container
+      - OMP_NUM_THREADS=32
+      - MKL_NUM_THREADS=32
+      - OPENBLAS_NUM_THREADS=32
+      - NUMEXPR_NUM_THREADS=32
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    # CPU-optimized resource limits for high-performance server
+    deploy:
+      resources:
+        limits:
+          memory: 16G        # More memory for concurrent processing
+          cpus: '24.0'       # Use most of your 32 cores (leave some for system)
+        reservations:
+          memory: 4G         # Reserve adequate memory
+          cpus: '8.0'        # Reserve minimum cores
+    # Enable better CPU scheduling
+    cap_add:
+      - SYS_NICE
+    ulimits:
+      nofile: 65536
+      nproc: 8192
+
+# Optional: Add a reverse proxy (nginx) for production
+  # nginx:
+  #   image: nginx:alpine
+  #   container_name: voicesentinel-nginx
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #   volumes:
+  #     - ./nginx.conf:/etc/nginx/nginx.conf:ro
+  #     - ./ssl:/etc/nginx/ssl:ro
+  #   depends_on:
+  #     - voicesentinel-processor
+  #   restart: unless-stopped
+
+# Optional: Add monitoring (Prometheus + Grafana)
+  # prometheus:
+  #   image: prom/prometheus
+  #   container_name: voicesentinel-prometheus
+  #   ports:
+  #     - "9090:9090"
+  #   volumes:
+  #     - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+  #   restart: unless-stopped
+
+  # grafana:
+  #   image: grafana/grafana
+  #   container_name: voicesentinel-grafana
+  #   ports:
+  #     - "3000:3000"
+  #   environment:
+  #     - GF_SECURITY_ADMIN_PASSWORD=admin
+  #   volumes:
+  #     - grafana-data:/var/lib/grafana
+  #   restart: unless-stopped
+
+# volumes:
+#   grafana-data: 
