@@ -13,6 +13,7 @@ import uuid
 import multiprocessing
 import glob
 import tempfile
+import argparse
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
@@ -20,8 +21,7 @@ from urllib.parse import unquote
 from collections import defaultdict
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Security, Depends
-from fastapi.security.api_key import APIKeyHeader
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Security, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from starlette.status import HTTP_403_FORBIDDEN
@@ -43,17 +43,16 @@ CPU_CORES = multiprocessing.cpu_count()
 logger.info(f"Detected {CPU_CORES} CPU cores on this system")
 
 # Authentication and Rate Limiting
-api_key_header = APIKeyHeader(name="X-API-Key")
 rate_limit_store = defaultdict(list)  # Store request timestamps per API key
 
-def get_api_key(api_key_header: str = Security(api_key_header)) -> str:
+def get_api_key(key: str = Query(None, description="API key for authentication")) -> str:
     """Validate API key and return authentication status"""
     if not config.get("server", {}).get("auth", {}).get("api_keys"):
-        return api_key_header
+        return key
         
-    if api_key_header not in config["server"]["auth"]["api_keys"]:
+    if key not in config["server"]["auth"]["api_keys"]:
         return None  # Return None for unauthenticated requests
-    return api_key_header
+    return key
 
 def check_rate_limit(api_key: str = Depends(get_api_key)):
     """Check rate limits with different thresholds for authenticated/unauthenticated requests"""
@@ -245,9 +244,14 @@ def load_config():
         with open(config_path, 'r') as f:
             config = json.load(f)
     else:
-        # Default configuration optimized for CPU processing and high concurrency (200+ players)
-        # Use CPU cores efficiently: leave 1-2 cores for system, use rest for workers
-        optimal_workers = max(8, min(CPU_CORES * 2, 32))  # Increased from 16 to 32 max workers
+        # Get processor workers from command line args
+        parser = argparse.ArgumentParser()
+        parser.add_argument('--processor-workers', type=int, default=None, 
+                          help='Number of audio processing workers')
+        args, _ = parser.parse_known_args()
+        
+        # Default configuration optimized for CPU processing and high concurrency
+        optimal_workers = args.processor_workers if args.processor_workers is not None else max(8, min(CPU_CORES * 2, 32))
         
         config = {
             "transcriber": {
@@ -268,12 +272,12 @@ def load_config():
             "server": {
                 "host": "0.0.0.0",
                 "port": 8000,
-                "workers": 4
+                "workers": 1  # Default to 1 HTTP worker
             },
             "processing": {
                 "max_concurrent_jobs": optimal_workers,
-                "queue_warning_threshold": optimal_workers * 20,  # Increased from 10 to 20
-                "max_queue_size": optimal_workers * 100,  # Increased from 50 to 100
+                "queue_warning_threshold": optimal_workers * 20,
+                "max_queue_size": optimal_workers * 100,
                 "processing_timeout_seconds": 90,
                 "retry_attempts": 1,
                 "retry_delay_seconds": 1
@@ -288,16 +292,17 @@ def load_config():
             }
         }
     
-    # Override worker count with CPU-optimized value if not explicitly set
-    if 'processing' in config:
-        current_workers = config['processing'].get('max_concurrent_jobs', 0)
-        if current_workers > CPU_CORES * 2:
-            # Cap at 2x CPU cores to prevent oversubscription
-            optimal_workers = CPU_CORES * 2
-            config['processing']['max_concurrent_jobs'] = optimal_workers
-            logger.info(f"Adjusted worker count from {current_workers} to {optimal_workers} (CPU optimized)")
+    # Override worker count with command line arg if provided
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--processor-workers', type=int, default=None,
+                      help='Number of audio processing workers')
+    args, _ = parser.parse_known_args()
     
-    logger.info(f"CPU Cores: {CPU_CORES}, Workers: {config['processing']['max_concurrent_jobs']}")
+    if args.processor_workers is not None:
+        config['processing']['max_concurrent_jobs'] = args.processor_workers
+        logger.info(f"Using {args.processor_workers} audio processing workers from command line argument")
+    
+    logger.info(f"CPU Cores: {CPU_CORES}, Processing Workers: {config['processing']['max_concurrent_jobs']}")
     logger.info(f"Configuration loaded and optimized for CPU processing")
 
 def cleanup_temporary_files():
@@ -536,7 +541,7 @@ async def store_result(server_key, result: ProcessedResult):
         logger.error(f"Failed to store result: {e}")
 
 @app.get("/")
-async def root(api_key: str = Depends(get_api_key)):
+async def root(key: str = Depends(get_api_key)):
     return {"message": "VoiceSentinel Processor is running"}
 
 @app.get("/health")
@@ -559,7 +564,7 @@ async def health_check():
     }
 
 @app.post("/transcribe", response_model=QueueResponse)
-async def queue_audio_transcription(request: TranscribeRequest, api_key: str = Depends(get_api_key)):
+async def queue_audio_transcription(request: TranscribeRequest, key: str = Depends(get_api_key)):
     """
     Queue WAV audio for async transcription processing
     Returns immediately - results available via file polling
@@ -648,7 +653,7 @@ async def queue_audio_transcription(request: TranscribeRequest, api_key: str = D
         raise HTTPException(status_code=500, detail="Internal server error")
 
 @app.get("/results")
-async def get_pending_results(key: str, api_key: str = Depends(get_api_key)):
+async def get_pending_results(key: str = Query(..., description="Server key for authentication")):
     """
     Get pending transcription results for a server key
     """
@@ -687,7 +692,7 @@ async def get_pending_results(key: str, api_key: str = Depends(get_api_key)):
         raise HTTPException(status_code=500, detail="Failed to get results")
 
 @app.post("/removeresult")
-async def remove_processed_results(key: str, request: CleanupRequest, api_key: str = Depends(get_api_key)):
+async def remove_processed_results(request: CleanupRequest, key: str = Query(..., description="Server key for authentication")):
     """
     Remove processed results from storage after plugin has handled them
     """
@@ -735,7 +740,7 @@ async def remove_processed_results(key: str, request: CleanupRequest, api_key: s
         raise HTTPException(status_code=500, detail="Failed to remove results")
 
 @app.get("/stats")
-async def get_stats(api_key: str = Depends(get_api_key)):
+async def get_stats(key: str = Depends(get_api_key)):
     """Get processing statistics"""
     queue_size = processing_queue.qsize()
     total_results = sum(len(results) for results in results_storage.values())
@@ -767,14 +772,26 @@ async def get_stats(api_key: str = Depends(get_api_key)):
     }
 
 if __name__ == "__main__":
+    # Parse command line arguments
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--host', type=str, default=None,
+                      help='Host to bind to')
+    parser.add_argument('--port', type=int, default=None,
+                      help='Port to bind to')
+    parser.add_argument('--workers', type=int, default=None,
+                      help='Number of HTTP worker processes')
+    parser.add_argument('--processor-workers', type=int, default=None,
+                      help='Number of audio processing workers')
+    args = parser.parse_args()
+    
     # Load configuration
     load_config()
     
-    # Get server config
+    # Get server config with command line overrides
     server_config = config.get("server", {})
-    host = server_config.get("host", "0.0.0.0")
-    port = server_config.get("port", 8000)
-    workers = server_config.get("workers", 1)
+    host = args.host or server_config.get("host", "0.0.0.0")
+    port = args.port or server_config.get("port", 8000)
+    workers = args.workers or server_config.get("workers", 1)
     
     # Run the server
     uvicorn.run(
