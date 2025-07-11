@@ -222,8 +222,7 @@ app = FastAPI(
     title="VoiceSentinel Processor",
     description="Real-time voice transcription and profanity filtering service",
     version="1.0.0",
-    lifespan=lifespan,
-    dependencies=[Depends(check_rate_limit)]
+    lifespan=lifespan
 )
 
 # CORS middleware for development
@@ -244,15 +243,7 @@ def load_config():
         with open(config_path, 'r') as f:
             config = json.load(f)
     else:
-        # Get processor workers from command line args
-        parser = argparse.ArgumentParser()
-        parser.add_argument('--processor-workers', type=int, default=None, 
-                          help='Number of audio processing workers')
-        args, _ = parser.parse_known_args()
-        
         # Default configuration optimized for CPU processing and high concurrency
-        optimal_workers = args.processor_workers if args.processor_workers is not None else max(8, min(CPU_CORES * 2, 32))
-        
         config = {
             "transcriber": {
                 "type": "whisper",
@@ -275,9 +266,9 @@ def load_config():
                 "workers": 1  # Default to 1 HTTP worker
             },
             "processing": {
-                "max_concurrent_jobs": optimal_workers,
-                "queue_warning_threshold": optimal_workers * 20,
-                "max_queue_size": optimal_workers * 100,
+                "max_concurrent_jobs": 4,  # Default to 4 workers
+                "queue_warning_threshold": 320,  # 16 * 20
+                "max_queue_size": 400,  # 16 * 100
                 "processing_timeout_seconds": 90,
                 "retry_attempts": 1,
                 "retry_delay_seconds": 1
@@ -291,16 +282,6 @@ def load_config():
                 "max_audio_length_ms": 15000
             }
         }
-    
-    # Override worker count with command line arg if provided
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--processor-workers', type=int, default=None,
-                      help='Number of audio processing workers')
-    args, _ = parser.parse_known_args()
-    
-    if args.processor_workers is not None:
-        config['processing']['max_concurrent_jobs'] = args.processor_workers
-        logger.info(f"Using {args.processor_workers} audio processing workers from command line argument")
     
     logger.info(f"CPU Cores: {CPU_CORES}, Processing Workers: {config['processing']['max_concurrent_jobs']}")
     logger.info(f"Configuration loaded and optimized for CPU processing")
@@ -494,6 +475,8 @@ async def _process_audio_job_internal(job, worker_id: int):
     
     # Check for profanity
     flagged_words = []
+    logger.info(f"Profanity check - transcript: '{transcript}', profanity_words: {profanity_words} (count: {len(profanity_words)})")
+    
     if transcript and profanity_words:
         # Create temporary profanity filter for this request
         temp_filter = ProfanityFilter(
@@ -502,6 +485,9 @@ async def _process_audio_job_internal(job, worker_id: int):
             partial_match=partial_match
         )
         flagged_words = temp_filter.check_text(transcript)
+        logger.info(f"Profanity filter result: {flagged_words} (flagged: {bool(flagged_words)})")
+    else:
+        logger.info(f"Skipping profanity check - transcript empty: {not transcript}, profanity_words empty: {not profanity_words}")
     
     processing_time = int((asyncio.get_event_loop().time() - start_time) * 1000)
     
@@ -540,7 +526,7 @@ async def store_result(server_key, result: ProcessedResult):
     except Exception as e:
         logger.error(f"Failed to store result: {e}")
 
-@app.get("/")
+@app.get("/", dependencies=[Depends(check_rate_limit)])
 async def root(key: str = Depends(get_api_key)):
     return {"message": "VoiceSentinel Processor is running"}
 
@@ -563,13 +549,17 @@ async def health_check():
         "version": "1.0.0"
     }
 
-@app.post("/transcribe", response_model=QueueResponse)
+@app.post("/transcribe", response_model=QueueResponse, dependencies=[Depends(check_rate_limit)])
 async def queue_audio_transcription(request: TranscribeRequest, key: str = Depends(get_api_key)):
     """
     Queue WAV audio for async transcription processing
     Returns immediately - results available via file polling
     """
     try:
+        # Validate API key first
+        if config.get("server", {}).get("auth", {}).get("api_keys") and key not in config["server"]["auth"]["api_keys"]:
+            raise HTTPException(status_code=HTTP_403_FORBIDDEN, detail="Invalid API key")
+        
         extra_info = ""
         if request.chunk_count is not None:
             extra_info += f", combined from {request.chunk_count} chunks"
@@ -577,6 +567,10 @@ async def queue_audio_transcription(request: TranscribeRequest, key: str = Depen
             extra_info += f", duration: {request.duration_ms}ms"
         
         logger.info(f"Queueing WAV audio from player: {request.player} (session: {request.session_id}){extra_info}")
+        
+        # Debug: Log profanity words received
+        logger.info(f"Profanity words received: {request.profanity_words} (count: {len(request.profanity_words)})")
+        logger.info(f"Case sensitive: {request.case_sensitive}, Partial match: {request.partial_match}")
         
         # Validate audio format
         if request.audio_format.lower() != "wav":
@@ -739,7 +733,7 @@ async def remove_processed_results(request: CleanupRequest, key: str = Query(...
         logger.error(f"Error removing results: {e}")
         raise HTTPException(status_code=500, detail="Failed to remove results")
 
-@app.get("/stats")
+@app.get("/stats", dependencies=[Depends(check_rate_limit)])
 async def get_stats(key: str = Depends(get_api_key)):
     """Get processing statistics"""
     queue_size = processing_queue.qsize()
@@ -780,8 +774,6 @@ if __name__ == "__main__":
                       help='Port to bind to')
     parser.add_argument('--workers', type=int, default=None,
                       help='Number of HTTP worker processes')
-    parser.add_argument('--processor-workers', type=int, default=None,
-                      help='Number of audio processing workers')
     args = parser.parse_args()
     
     # Load configuration
