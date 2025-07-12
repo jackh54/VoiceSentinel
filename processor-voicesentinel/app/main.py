@@ -188,10 +188,6 @@ async def lifespan(app: FastAPI):
         }
     
     logger.info(f"Started {max_workers} parallel audio processing workers")
-    
-    # Results now stored in memory and served via web API
-    logger.info("Using in-memory storage for transcription results")
-    
     logger.info("VoiceSentinel Processor is ready!")
     
     yield
@@ -225,13 +221,14 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS middleware for development
+# CORS middleware configuration
+cors_config = config.get("server", {}).get("cors", {})
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=cors_config.get("allow_origins", ["*"]),
+    allow_credentials=cors_config.get("allow_credentials", True),
+    allow_methods=cors_config.get("allow_methods", ["*"]),
+    allow_headers=cors_config.get("allow_headers", ["*"]),
 )
 
 def load_config():
@@ -263,12 +260,18 @@ def load_config():
             "server": {
                 "host": "0.0.0.0",
                 "port": 8000,
-                "workers": 1  # Default to 1 HTTP worker
+                "workers": 1,  # Default to 1 HTTP worker
+                "cors": {
+                    "allow_origins": ["*"],
+                    "allow_credentials": True,
+                    "allow_methods": ["*"],
+                    "allow_headers": ["*"]
+                }
             },
             "processing": {
                 "max_concurrent_jobs": 4,  # Default to 4 workers
-                "queue_warning_threshold": 320,  # 16 * 20
-                "max_queue_size": 400,  # 16 * 100
+                "queue_warning_threshold": 80,  # 4 * 20
+                "max_queue_size": 400,  # 4 * 100
                 "processing_timeout_seconds": 90,
                 "retry_attempts": 1,
                 "retry_delay_seconds": 1
@@ -313,7 +316,7 @@ def cleanup_temporary_files():
                     logger.debug(f"Could not remove temp file {file_path}: {e}")
         
         if removed_count > 0:
-            logger.info(f"PRIVACY: Cleaned up {removed_count} stray temporary audio files")
+            logger.info(f"Cleaned up {removed_count} stray temporary audio files")
         
     except Exception as e:
         logger.warning(f"Error during temporary file cleanup: {e}")
