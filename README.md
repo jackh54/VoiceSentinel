@@ -7,12 +7,13 @@
 
 VoiceSentinel is a comprehensive real-time voice moderation system for Minecraft servers using Simple Voice Chat. It combines a Java-based Minecraft plugin with a Python backend processor to provide advanced speech-to-text transcription and content filtering capabilities.
 
+> ⚠️ **Important:** VoiceSentinel setup requires basic knowledge of Linux and Docker. If you are new to these technologies, we recommend seeking assistance from someone experienced before continuing. For installation support, join my Discord. (link at the bottom).
+
 ## 🌟 Features
 
 ### Core Functionality
 - **Real-time voice transcription** using OpenAI Whisper models
 - **Advanced profanity detection** with customizable word lists and pattern matching
-- **Multi-language support** for international servers
 - **Configurable audio processing** with chunk size, sample rate, and duration limits
 - **Rate limiting and API key authentication** for secure integration
 - **Queue-based processing** for handling high-volume voice chat
@@ -28,11 +29,8 @@ VoiceSentinel is a comprehensive real-time voice moderation system for Minecraft
 - **Health monitoring** and system statistics
 
 ### Minecraft Integration
-- **Folia & Paper compatibility** for modern server software
+- **Folia & Paper compatibility** for modern server software, might work for bukkit/spigot, but who cares about those anymore?
 - **Simple Voice Chat integration** for seamless voice capture
-- **Configurable moderation actions** (warnings, kicks, bans)
-- **Player-specific settings** and permissions
-- **Server-wide and per-world configuration**
 
 ## 📋 Requirements
 
@@ -54,7 +52,7 @@ VoiceSentinel is a comprehensive real-time voice moderation system for Minecraft
 ### 1. Backend Setup
 
 ```bash
-# Clone the repository
+# Clone the repository, it is recommended to download the latest release though.
 git clone https://github.com/jackh54/VoiceSentinel.git
 cd VoiceSentinel/processor-voicesentinel
 
@@ -75,7 +73,7 @@ docker compose down
 
 ### 2. Plugin Installation
 
-Install and configure the plugin as described in the plugin's documentation.
+Install and configure the plugin as described in the plugin's documentation. Make sure to set the same server-key in both the processor & plugin configuration
 
 ### 3. Configuration
 
@@ -84,32 +82,72 @@ Configure the backend using `config.json` (see below). For plugin configuration,
 #### Sample Backend Configuration (`config.json`)
 ```json
 {
-  "transcriber": {
-    "type": "whisper",
-    "model_name": "tiny.en",
-    "language": "en"
-  },
   "server": {
     "host": "0.0.0.0",
     "port": 8000,
-    "workers": 4
+    "workers": 4,
+    "cors": {
+      "allow_origins": ["*"],
+      "allow_credentials": true,
+      "allow_methods": ["*"],
+      "allow_headers": ["*"]
+    }
+  },
+  "security": {
+    "api_keys": [],
+    "rate_limit": {
+      "authenticated": {
+        "window_seconds": 60,
+        "max_requests": 1000,
+        "block_duration_seconds": 300
+      },
+      "unauthenticated": {
+        "window_seconds": 60,
+        "max_requests": 10,
+        "block_duration_seconds": 1800
+      }
+    }
+  },
+  "transcription": {
+    "engine": "whisper",
+    "model": "tiny.en",
+    "language": "en",
+    "timeout_seconds": 90,
+    "cpu_threads": 1,
+    "options": {
+      "fp16": false,
+      "temperature": 0.0,
+      "condition_on_previous_text": false,
+      "no_speech_threshold": 0.7,
+      "beam_size": 1,
+      "best_of": 1,
+      "suppress_blank": true,
+      "initial_prompt": "Player voice chat audio containing speech."
+    }
   },
   "processing": {
     "max_concurrent_jobs": 4,
-    "queue_warning_threshold": 200
+    "queue_warning_threshold": 200,
+    "max_queue_size": 1000,
+    "timeout_seconds": 90,
+    "retry_attempts": 2,
+    "retry_delay_seconds": 1
   },
   "audio": {
     "max_chunk_size": 262144,
     "max_total_size": 5242880,
-    "sample_rate": 16000
+    "sample_rate": 16000,
+    "channels": 1,
+    "min_length_ms": 300,
+    "max_length_ms": 15000
   }
-}
+} 
 ```
 
 ### Production Deployment
 
 1. **Use a reverse proxy** (nginx/Apache) for SSL termination
-2. **Implement backup strategies** for configuration and logs
+2. **Implement backup strategies** for configuration and logs (*optional*)
 
 ### Performance Tuning
 
@@ -192,6 +230,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - [ ] Proper Pterodactyl Egg setup (current egg shouldn't be used for production)
 
 ### Technical Improvements
+
 - [ ] Optimize performance for large servers
 - [ ] Microservices for scalability
 - [ ] Add GraphQL API
