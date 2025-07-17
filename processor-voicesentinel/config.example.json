@@ -1,34 +1,52 @@
 {
-  "transcriber": {
-    "type": "whisper",
-    "model_name": "tiny.en",
-    "language": "en"
-  },
   "server": {
     "host": "0.0.0.0",
     "port": 8000,
     "workers": 4,
-    "auth": {
-      "api_keys": [],
-      "rate_limit": {
-        "authenticated": {
-          "window_seconds": 60,
-          "max_requests": 1000,
-          "block_duration_seconds": 300
-        },
-        "unauthenticated": {
-          "window_seconds": 60,
-          "max_requests": 10,
-          "block_duration_seconds": 1800
-        }
+    "cors": {
+      "allow_origins": ["*"],
+      "allow_credentials": true,
+      "allow_methods": ["*"],
+      "allow_headers": ["*"]
+    }
+  },
+  "security": {
+    "api_keys": [],
+    "rate_limit": {
+      "authenticated": {
+        "window_seconds": 60,
+        "max_requests": 1000,
+        "block_duration_seconds": 300
+      },
+      "unauthenticated": {
+        "window_seconds": 60,
+        "max_requests": 10,
+        "block_duration_seconds": 1800
       }
+    }
+  },
+  "transcription": {
+    "engine": "whisper",
+    "model": "tiny.en",
+    "language": "en",
+    "timeout_seconds": 90,
+    "cpu_threads": 1,
+    "options": {
+      "fp16": false,
+      "temperature": 0.0,
+      "condition_on_previous_text": false,
+      "no_speech_threshold": 0.7,
+      "beam_size": 1,
+      "best_of": 1,
+      "suppress_blank": true,
+      "initial_prompt": "Player voice chat audio containing speech."
     }
   },
   "processing": {
     "max_concurrent_jobs": 4,
     "queue_warning_threshold": 200,
-    "max_queue_size": 400,
-    "processing_timeout_seconds": 90,
+    "max_queue_size": 1000,
+    "timeout_seconds": 90,
     "retry_attempts": 2,
     "retry_delay_seconds": 1
   },
@@ -37,23 +55,7 @@
     "max_total_size": 5242880,
     "sample_rate": 16000,
     "channels": 1,
-    "min_audio_length_ms": 300,
-    "max_audio_length_ms": 15000
-  },
-  "whisper": {
-    "timeout_seconds": 90,
-    "fp16": false,
-    "temperature": 0.0,
-    "condition_on_previous_text": false,
-    "no_speech_threshold": 0.7,
-    "logprob_threshold": -1.0,
-    "compression_ratio_threshold": 2.4,
-    "beam_size": 1,
-    "best_of": 1,
-    "patience": 1.0,
-    "suppress_blank": true,
-    "word_timestamps": false,
-    "initial_prompt": "Player voice chat audio containing speech.",
-    "threads": 0
+    "min_length_ms": 300,
+    "max_length_ms": 15000
   }
 } 

@@ -5,7 +5,7 @@ import base64
 from fastapi.testclient import TestClient
 from unittest.mock import Mock, patch, AsyncMock
 
-from main import app, ProcessingRequest, ProcessingResponse
+from main import app, TranscribeRequest, TranscribeResponse
 
 # Test client
 client = TestClient(app)
@@ -21,21 +21,19 @@ class TestProcessorEndpoints:
         assert "timestamp" in data
         assert "version" in data
     
-    def test_info_endpoint(self):
-        """Test the info endpoint"""
-        response = client.get("/info")
+    def test_root_endpoint(self):
+        """Test the root endpoint"""
+        response = client.get("/")
         assert response.status_code == 200
         data = response.json()
-        assert data["service"] == "VoiceSentinel Processor"
-        assert "transcription_engine" in data
-        assert "supported_formats" in data
+        assert "message" in data
     
     @patch('main.transcriber')
     @patch('main.decoder')
     def test_transcribe_endpoint_success(self, mock_decoder, mock_transcriber):
         """Test successful transcription"""
         # Mock audio data
-        test_audio_data = b"fake_opus_audio_data"
+        test_audio_data = b"fake_wav_audio_data"
         encoded_audio = base64.b64encode(test_audio_data).decode()
         
         # Mock decoder response
@@ -49,10 +47,12 @@ class TestProcessorEndpoints:
         }
         
         request_data = {
-            "player_id": "550e8400-e29b-41d4-a716-446655440000",
+            "session_id": "test_session_12345678",
+            "player": "TestPlayer",
+            "timestamp": 1234567890,
+            "audio_format": "wav",
             "audio_data": encoded_audio,
-            "format": "opus",
-            "sample_rate": 48000
+            "server_key": "test_key_1234567890123456"
         }
         
         response = client.post("/transcribe", json=request_data)
@@ -88,10 +88,12 @@ class TestProcessorEndpoints:
         }
         
         request_data = {
-            "player_id": "550e8400-e29b-41d4-a716-446655440000",
+            "session_id": "test_session_12345678",
+            "player": "TestPlayer",
+            "timestamp": 1234567890,
+            "audio_format": "wav",
             "audio_data": encoded_audio,
-            "format": "opus",
-            "sample_rate": 48000
+            "server_key": "test_key_1234567890123456"
         }
         
         response = client.post("/transcribe", json=request_data)
@@ -106,10 +108,12 @@ class TestProcessorEndpoints:
     def test_transcribe_invalid_audio_data(self):
         """Test transcription with invalid audio data"""
         request_data = {
-            "player_id": "550e8400-e29b-41d4-a716-446655440000",
+            "session_id": "test_session_12345678",
+            "player": "TestPlayer",
+            "timestamp": 1234567890,
+            "audio_format": "wav",
             "audio_data": "invalid_base64_data!@#",
-            "format": "opus",
-            "sample_rate": 48000
+            "server_key": "test_key_1234567890123456"
         }
         
         response = client.post("/transcribe", json=request_data)
@@ -136,10 +140,12 @@ class TestProcessorEndpoints:
         mock_decoder.decode_opus_to_pcm.side_effect = Exception("Decode failed")
         
         request_data = {
-            "player_id": "550e8400-e29b-41d4-a716-446655440000",
+            "session_id": "test_session_12345678",
+            "player": "TestPlayer",
+            "timestamp": 1234567890,
+            "audio_format": "wav",
             "audio_data": encoded_audio,
-            "format": "opus",
-            "sample_rate": 48000
+            "server_key": "test_key_1234567890123456"
         }
         
         response = client.post("/transcribe", json=request_data)
@@ -159,10 +165,12 @@ class TestProcessorEndpoints:
         mock_transcriber.transcribe_audio.side_effect = Exception("Transcription failed")
         
         request_data = {
-            "player_id": "550e8400-e29b-41d4-a716-446655440000",
+            "session_id": "test_session_12345678",
+            "player": "TestPlayer",
+            "timestamp": 1234567890,
+            "audio_format": "wav",
             "audio_data": encoded_audio,
-            "format": "opus",
-            "sample_rate": 48000
+            "server_key": "test_key_1234567890123456"
         }
         
         response = client.post("/transcribe", json=request_data)
@@ -173,51 +181,55 @@ class TestProcessorEndpoints:
 
 class TestModels:
     
-    def test_processing_request_validation(self):
-        """Test ProcessingRequest model validation"""
+    def test_transcribe_request_validation(self):
+        """Test TranscribeRequest model validation"""
         # Valid request
         valid_data = {
-            "player_id": "550e8400-e29b-41d4-a716-446655440000",
+            "session_id": "test_session_12345678",
+            "player": "TestPlayer",
+            "timestamp": 1234567890,
+            "audio_format": "wav",
             "audio_data": "dGVzdA==",  # base64 for "test"
-            "format": "opus",
-            "sample_rate": 48000
+            "server_key": "test_key_1234567890123456"
         }
         
-        request = ProcessingRequest(**valid_data)
-        assert str(request.player_id) == "550e8400-e29b-41d4-a716-446655440000"
-        assert request.format == "opus"
-        assert request.sample_rate == 48000
+        request = TranscribeRequest(**valid_data)
+        assert request.session_id == "test_session_12345678"
+        assert request.player == "TestPlayer"
+        assert request.audio_format == "wav"
     
-    def test_processing_request_invalid_uuid(self):
-        """Test ProcessingRequest with invalid UUID"""
+    def test_transcribe_request_invalid_session_id(self):
+        """Test TranscribeRequest with invalid session ID"""
         invalid_data = {
-            "player_id": "not-a-uuid",
+            "session_id": "short",  # Too short
+            "player": "TestPlayer",
+            "timestamp": 1234567890,
+            "audio_format": "wav",
             "audio_data": "dGVzdA==",
-            "format": "opus",
-            "sample_rate": 48000
+            "server_key": "test_key_1234567890123456"
         }
         
         with pytest.raises(ValueError):
-            ProcessingRequest(**invalid_data)
+            TranscribeRequest(**invalid_data)
     
-    def test_processing_response_creation(self):
-        """Test ProcessingResponse model creation"""
+    def test_transcribe_response_creation(self):
+        """Test TranscribeResponse model creation"""
         response_data = {
-            "success": True,
-            "player_id": "550e8400-e29b-41d4-a716-446655440000",
-            "transcription": {
-                "text": "hello world",
-                "confidence": 0.95,
-                "duration": 2.0
-            },
-            "profanity_detected": False,
-            "processing_time": 1.5
+            "session_id": "test_session_12345678",
+            "player": "TestPlayer",
+            "flagged": False,
+            "bad_words": [],
+            "transcript": "hello world",
+            "chunks_processed": 1,
+            "processing_time_ms": 1500
         }
         
-        response = ProcessingResponse(**response_data)
-        assert response.success is True
-        assert response.transcription["text"] == "hello world"
-        assert response.profanity_detected is False
+        response = TranscribeResponse(**response_data)
+        assert response.session_id == "test_session_12345678"
+        assert response.player == "TestPlayer"
+        assert response.flagged is False
+        assert response.bad_words == []
+        assert response.transcript == "hello world"
 
 if __name__ == "__main__":
     pytest.main([__file__]) 

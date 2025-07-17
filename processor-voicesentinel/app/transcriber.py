@@ -39,7 +39,7 @@ class WhisperTranscriber(BaseTranscriber):
         self._load_model()
         
         # Whisper-specific configuration
-        self.whisper_config = self.config.get("whisper", {})
+        self.whisper_config = self.config.get("transcription", {})
         self.timeout_seconds = self.whisper_config.get("timeout_seconds", 150)
         
         logger.info(f"Initialized OpenAI Whisper transcriber with model: {model_name}")
@@ -51,7 +51,7 @@ class WhisperTranscriber(BaseTranscriber):
             import torch
             
             # Set CPU processing for optimal performance
-            threads = self.config.get("whisper", {}).get("threads", 0)
+            threads = self.config.get("transcription", {}).get("cpu_threads", 0)
             if threads > 0:
                 torch.set_num_threads(threads)
             
@@ -190,18 +190,14 @@ class WhisperTranscriber(BaseTranscriber):
                         # Get Whisper configuration
                         whisper_opts = {
                             "language": self.language if self.language != "auto" else None,
-                            "fp16": self.whisper_config.get("fp16", False),
+                            "fp16": self.whisper_config.get("options", {}).get("fp16", False),
                             "verbose": False,
-                            "temperature": self.whisper_config.get("temperature", 0.0),
-                            "condition_on_previous_text": self.whisper_config.get("condition_on_previous_text", False),
-                            "no_speech_threshold": self.whisper_config.get("no_speech_threshold", 0.6),
-                            "logprob_threshold": self.whisper_config.get("logprob_threshold", -1.0),
-                            "compression_ratio_threshold": self.whisper_config.get("compression_ratio_threshold", 2.4),
-                            "beam_size": self.whisper_config.get("beam_size", 1),
-                            "best_of": self.whisper_config.get("best_of", 1),
-                            "patience": self.whisper_config.get("patience", 1.0),
-                            "suppress_blank": self.whisper_config.get("suppress_blank", True),
-                            "word_timestamps": self.whisper_config.get("word_timestamps", False)
+                            "temperature": self.whisper_config.get("options", {}).get("temperature", 0.0),
+                            "condition_on_previous_text": self.whisper_config.get("options", {}).get("condition_on_previous_text", False),
+                            "no_speech_threshold": self.whisper_config.get("options", {}).get("no_speech_threshold", 0.7),
+                            "beam_size": self.whisper_config.get("options", {}).get("beam_size", 1),
+                            "best_of": self.whisper_config.get("options", {}).get("best_of", 1),
+                            "suppress_blank": self.whisper_config.get("options", {}).get("suppress_blank", True)
                         }
                         
                         # Add optional parameters if they exist

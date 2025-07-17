@@ -2,6 +2,9 @@
 """
 VoiceSentinel Processor Backend
 Real-time voice transcription and profanity filtering service
+
+This service provides asynchronous audio processing with queue-based job management,
+supporting multiple transcription engines and robust error handling.
 """
 
 import asyncio
@@ -16,41 +19,187 @@ import tempfile
 import argparse
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 from urllib.parse import unquote
 from collections import defaultdict
+from pathlib import Path
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Security, Depends, Query
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Security, Depends, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from pydantic import BaseModel, Field, validator
 from starlette.status import HTTP_403_FORBIDDEN
+from starlette.responses import Response
 
 # Import our modules
 from app.transcriber import WhisperTranscriber, VoskTranscriber
 from app.decoder import OpusDecoder
 from app.profanity import ProfanityFilter, create_default_filter
 
-# Configure logging
+# Configure logging with better formatting
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('logs/processor.log', mode='a') if os.path.exists('logs') else logging.NullHandler()
+    ]
 )
 logger = logging.getLogger(__name__)
 
-# Detect CPU cores and optimize for CPU processing
+# System information
 CPU_CORES = multiprocessing.cpu_count()
-logger.info(f"Detected {CPU_CORES} CPU cores on this system")
+logger.info(f"System initialized with {CPU_CORES} CPU cores")
 
-# Authentication and Rate Limiting
-rate_limit_store = defaultdict(list)  # Store request timestamps per API key
+# Global state
+rate_limit_store = defaultdict(list)
+config = {}
+transcriber = None
+decoder = None
+profanity_filter = None
+processing_queue = None
+results_storage = {}
+processing_active = False
+worker_stats = {}
+
+class ConfigurationError(Exception):
+    """Raised when configuration is invalid"""
+    pass
+
+def validate_config(config_data: Dict[str, Any]) -> None:
+    """Validate configuration structure and values"""
+    required_sections = ['server', 'security', 'transcription', 'processing', 'audio']
+    
+    for section in required_sections:
+        if section not in config_data:
+            raise ConfigurationError(f"Missing required configuration section: {section}")
+    
+    # Validate server configuration
+    server_config = config_data['server']
+    if not isinstance(server_config.get('port'), int) or not (1 <= server_config.get('port') <= 65535):
+        raise ConfigurationError("Server port must be an integer between 1 and 65535")
+    
+    # Validate processing configuration
+    processing_config = config_data['processing']
+    max_jobs = processing_config.get('max_concurrent_jobs', 4)
+    if not isinstance(max_jobs, int) or max_jobs < 1 or max_jobs > 100:
+        raise ConfigurationError("max_concurrent_jobs must be an integer between 1 and 100")
+    
+    # Validate audio configuration
+    audio_config = config_data['audio']
+    max_size = audio_config.get('max_total_size', 5242880)
+    if not isinstance(max_size, int) or max_size < 1024 or max_size > 50 * 1024 * 1024:
+        raise ConfigurationError("max_total_size must be between 1KB and 50MB")
+    
+    logger.info("Configuration validation passed")
+
+def load_config() -> Dict[str, Any]:
+    """Load and validate configuration from config.json"""
+    config_path = Path(__file__).parent.parent / 'config.json'
+    
+    try:
+        if config_path.exists():
+            with open(config_path, 'r') as f:
+                config_data = json.load(f)
+            logger.info(f"Configuration loaded from {config_path}")
+        else:
+            logger.warning(f"Config file not found at {config_path}, using defaults")
+            config_data = get_default_config()
+        
+        validate_config(config_data)
+        
+        # Log key configuration settings
+        transcription_engine = config_data.get('transcription', {}).get('engine', 'unknown')
+        max_workers = config_data.get('processing', {}).get('max_concurrent_jobs', 4)
+        logger.info(f"Transcription engine: {transcription_engine}")
+        logger.info(f"Max concurrent workers: {max_workers}")
+        logger.info(f"Audio processing limits: {config_data.get('audio', {}).get('max_total_size', 0)} bytes")
+        
+        return config_data
+        
+    except json.JSONDecodeError as e:
+        raise ConfigurationError(f"Invalid JSON in config file: {e}")
+    except Exception as e:
+        raise ConfigurationError(f"Failed to load configuration: {e}")
+
+def get_default_config() -> Dict[str, Any]:
+    """Get default configuration optimized for CPU processing"""
+    return {
+        "server": {
+            "host": "0.0.0.0",
+            "port": 8000,
+            "workers": 1,
+            "cors": {
+                "allow_origins": ["*"],
+                "allow_credentials": True,
+                "allow_methods": ["*"],
+                "allow_headers": ["*"]
+            }
+        },
+        "security": {
+            "api_keys": [],
+            "rate_limit": {
+                "authenticated": {
+                    "window_seconds": 60,
+                    "max_requests": 1000,
+                    "block_duration_seconds": 300
+                },
+                "unauthenticated": {
+                    "window_seconds": 60,
+                    "max_requests": 10,
+                    "block_duration_seconds": 1800
+                }
+            }
+        },
+        "transcription": {
+            "engine": "whisper",
+            "model": "tiny.en",
+            "language": "en",
+            "timeout_seconds": 90,
+            "cpu_threads": min(4, CPU_CORES),
+            "options": {
+                "fp16": False,
+                "temperature": 0.0,
+                "condition_on_previous_text": False,
+                "no_speech_threshold": 0.7,
+                "beam_size": 1,
+                "best_of": 1,
+                "suppress_blank": True,
+                "initial_prompt": "Player voice chat audio containing speech."
+            }
+        },
+        "processing": {
+            "max_concurrent_jobs": min(4, CPU_CORES),
+            "queue_warning_threshold": 200,
+            "max_queue_size": 1000,
+            "timeout_seconds": 90,
+            "retry_attempts": 2,
+            "retry_delay_seconds": 1
+        },
+        "audio": {
+            "max_chunk_size": 262144,  # 256KB
+            "max_total_size": 5242880,  # 5MB
+            "sample_rate": 16000,
+            "channels": 1,
+            "min_length_ms": 300,
+            "max_length_ms": 15000
+        }
+    }
+
+# Initialize configuration
+try:
+    config = load_config()
+except ConfigurationError as e:
+    logger.error(f"Configuration error: {e}")
+    exit(1)
 
 def get_api_key(key: str = Query(None, description="API key for authentication")) -> str:
     """Validate API key and return authentication status"""
-    if not config.get("server", {}).get("auth", {}).get("api_keys"):
+    if not config.get("security", {}).get("api_keys"):
         return key
         
-    if key not in config["server"]["auth"]["api_keys"]:
+    if key not in config["security"]["api_keys"]:
         return None  # Return None for unauthenticated requests
     return key
 
@@ -60,10 +209,10 @@ def check_rate_limit(api_key: str = Depends(get_api_key)):
         return
 
     # Determine if request is authenticated
-    is_authenticated = api_key in (config.get("server", {}).get("auth", {}).get("api_keys", []))
+    is_authenticated = api_key in (config.get("security", {}).get("api_keys", []))
     
     # Get appropriate rate limit config
-    rate_config = config["server"]["auth"]["rate_limit"]
+    rate_config = config["security"]["rate_limit"]
     if is_authenticated:
         limit_config = rate_config["authenticated"]
     else:
@@ -78,14 +227,11 @@ def check_rate_limit(api_key: str = Depends(get_api_key)):
     max_requests = limit_config["max_requests"]
     block_duration = limit_config["block_duration_seconds"]
     
-    # Clean old requests
     now = datetime.now()
     rate_limit_store[api_key] = [
         ts for ts in rate_limit_store[api_key]
         if now - ts < timedelta(seconds=window)
     ]
-    
-    # Check if blocked
     if rate_limit_store[api_key] and \
        len(rate_limit_store[api_key]) >= max_requests and \
        now - rate_limit_store[api_key][0] < timedelta(seconds=block_duration):
@@ -94,11 +240,8 @@ def check_rate_limit(api_key: str = Depends(get_api_key)):
             detail=f"Rate limit exceeded. Try again in {block_duration} seconds."
         )
     
-    # Add current request
     rate_limit_store[api_key].append(now)
     return api_key
-
-# Request/Response models
 
 class TranscribeRequest(BaseModel):
     session_id: str = Field(..., description="Unique session identifier")
@@ -108,14 +251,28 @@ class TranscribeRequest(BaseModel):
     audio_data: str = Field(..., description="Base64 encoded WAV file")
     chunk_count: Optional[int] = Field(None, description="Number of chunks combined")
     duration_ms: Optional[int] = Field(None, description="Duration of speech sequence in milliseconds")
-    
-    # Server identification and async processing
     server_key: str = Field(..., description="Server key for file-based result delivery")
-    
-    # Profanity filtering configuration
     profanity_words: List[str] = Field(default_factory=list, description="List of words to filter")
     case_sensitive: bool = Field(default=False, description="Whether profanity filtering is case sensitive")
     partial_match: bool = Field(default=True, description="Whether to match partial words")
+    
+    @validator('session_id')
+    def validate_session_id(cls, v):
+        if not v or len(v) < 8 or len(v) > 128:
+            raise ValueError('Session ID must be between 8 and 128 characters')
+        return v
+    
+    @validator('server_key')
+    def validate_server_key(cls, v):
+        if not v or len(v) < 16 or len(v) > 256:
+            raise ValueError('Server key must be between 16 and 256 characters')
+        return v
+    
+    @validator('audio_data')
+    def validate_audio_data(cls, v):
+        if not v or len(v) > 10485760:  # 10MB limit
+            raise ValueError('Audio data too large or empty')
+        return v
 
 class TranscribeResponse(BaseModel):
     session_id: str
@@ -150,70 +307,73 @@ class CleanupRequest(BaseModel):
     server_key: str = Field(..., description="Server key for authentication")
     session_ids: List[str] = Field(..., description="Session IDs to remove from results")
 
-# Initialize global components
-config = {}
-transcriber = None
-decoder = None
-profanity_filter = None
-
-# Async processing queue and results storage
-processing_queue = asyncio.Queue()
-results_storage = {}  # server_key -> {session_id -> ProcessedResult}
-processing_active = False
-worker_stats = {}  # worker_id -> stats
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Handle application startup and shutdown"""
-    global processing_active
+    """Handle application startup and shutdown with comprehensive resource management"""
+    global processing_active, processing_queue
     
-    # Startup
     logger.info("Starting VoiceSentinel Processor...")
-    load_config()
-    initialize_components()
     
-    # Start multiple parallel processing workers
-    processing_active = True
-    max_workers = config.get("processing", {}).get("max_concurrent_jobs", 25)
-    processing_tasks = []
-    
-    for i in range(max_workers):
-        task = asyncio.create_task(background_audio_processor(worker_id=i))
-        processing_tasks.append(task)
-        worker_stats[i] = {
-            "jobs_processed": 0,
-            "jobs_failed": 0,
-            "total_processing_time": 0,
-            "status": "idle"
-        }
-    
-    logger.info(f"Started {max_workers} parallel audio processing workers")
-    logger.info("VoiceSentinel Processor is ready!")
-    
-    yield
-    
-    # Shutdown
-    logger.info("Shutting down VoiceSentinel Processor...")
-    processing_active = False
-    
-    # Cancel all background tasks
-    for task in processing_tasks:
-        task.cancel()
-    
-    # Wait for all tasks to complete
     try:
-        await asyncio.gather(*processing_tasks, return_exceptions=True)
+        # Initialize core components
+        await initialize_components()
+        
+        # Initialize processing queue
+        processing_queue = asyncio.Queue()
+        processing_active = True
+        
+        # Start background workers
+        max_workers = config.get("processing", {}).get("max_concurrent_jobs", 4)
+        processing_tasks = []
+        
+        for i in range(max_workers):
+            task = asyncio.create_task(background_audio_processor(worker_id=i))
+            processing_tasks.append(task)
+            worker_stats[i] = {
+                "jobs_processed": 0,
+                "jobs_failed": 0,
+                "total_processing_time": 0,
+                "status": "idle",
+                "last_activity": datetime.now().isoformat()
+            }
+        
+        logger.info(f"Started {max_workers} parallel audio processing workers")
+        logger.info("VoiceSentinel Processor is ready!")
+        
+        yield
+        
     except Exception as e:
-        logger.warning(f"Error during task shutdown: {e}")
+        logger.error(f"Failed to start VoiceSentinel Processor: {e}")
+        raise
     
-    if transcriber:
-        await transcriber.cleanup()
-    if decoder:
-        await decoder.cleanup()
-    
-    logger.info("VoiceSentinel Processor shutdown complete")
+    finally:
+        # Graceful shutdown
+        logger.info("Shutting down VoiceSentinel Processor...")
+        processing_active = False
+        
+        # Cancel all processing tasks
+        for task in processing_tasks:
+            task.cancel()
+        
+        # Wait for tasks to complete with timeout
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*processing_tasks, return_exceptions=True),
+                timeout=30.0
+            )
+        except asyncio.TimeoutError:
+            logger.warning("Some processing tasks did not complete within timeout")
+        except Exception as e:
+            logger.warning(f"Error during task shutdown: {e}")
+        
+        # Cleanup components
+        await cleanup_components()
+        
+        # Clean up temporary files
+        cleanup_temporary_files()
+        
+        logger.info("VoiceSentinel Processor shutdown complete")
 
-# Global components
 app = FastAPI(
     title="VoiceSentinel Processor",
     description="Real-time voice transcription and profanity filtering service",
@@ -221,76 +381,42 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS middleware configuration
-cors_config = config.get("server", {}).get("cors", {})
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=cors_config.get("allow_origins", ["*"]),
-    allow_credentials=cors_config.get("allow_credentials", True),
-    allow_methods=cors_config.get("allow_methods", ["*"]),
-    allow_headers=cors_config.get("allow_headers", ["*"]),
-)
+def setup_middleware(app: FastAPI):
+    """Configure all middleware for the application"""
+    # CORS middleware configuration
+    cors_config = config.get("server", {}).get("cors", {})
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_config.get("allow_origins", ["*"]),
+        allow_credentials=cors_config.get("allow_credentials", True),
+        allow_methods=cors_config.get("allow_methods", ["*"]),
+        allow_headers=cors_config.get("allow_headers", ["*"]),
+    )
 
-def load_config():
-    """Load configuration from config.json"""
-    global config
-    config_path = os.path.join(os.path.dirname(__file__), '../config.json')
-    
-    if os.path.exists(config_path):
-        with open(config_path, 'r') as f:
-            config = json.load(f)
-    else:
-        # Default configuration optimized for CPU processing and high concurrency
-        config = {
-            "transcriber": {
-                "type": "whisper",
-                "model_name": "tiny.en",
-                "language": "en"
-            },
-            "whisper": {
-                "timeout_seconds": 90,
-                "fp16": False,  # CPU processing
-                "threads": 0,   # Let Whisper auto-detect optimal CPU threads
-                "temperature": 0.0,
-                "condition_on_previous_text": False,
-                "no_speech_threshold": 0.7,
-                "beam_size": 1,
-                "best_of": 1
-            },
-            "server": {
-                "host": "0.0.0.0",
-                "port": 8000,
-                "workers": 1,  # Default to 1 HTTP worker
-                "cors": {
-                    "allow_origins": ["*"],
-                    "allow_credentials": True,
-                    "allow_methods": ["*"],
-                    "allow_headers": ["*"]
-                }
-            },
-            "processing": {
-                "max_concurrent_jobs": 4,  # Default to 4 workers
-                "queue_warning_threshold": 80,  # 4 * 20
-                "max_queue_size": 400,  # 4 * 100
-                "processing_timeout_seconds": 90,
-                "retry_attempts": 1,
-                "retry_delay_seconds": 1
-            },
-            "audio": {
-                "max_chunk_size": 262144,
-                "max_total_size": 5242880,
-                "sample_rate": 16000,
-                "channels": 1,
-                "min_audio_length_ms": 300,
-                "max_audio_length_ms": 15000
-            }
-        }
-    
-    logger.info(f"CPU Cores: {CPU_CORES}, Processing Workers: {config['processing']['max_concurrent_jobs']}")
-    logger.info(f"Configuration loaded and optimized for CPU processing")
+    app.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=["*"]
+    )
+
+    @app.middleware("http")
+    async def add_security_headers(request: Request, call_next):
+        """Add security headers to all responses"""
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        return response
+
+    logger.info(f"CORS configured: origins={cors_config.get('allow_origins', ['*'])}")
+    logger.info("Security middleware configured")
+
+# Configure middleware
+setup_middleware(app)
 
 def cleanup_temporary_files():
-    """Clean up any temporary audio files that might be left from previous runs"""
+    """Clean up temporary audio files from previous runs"""
     try:
         temp_dir = tempfile.gettempdir()
         
@@ -321,40 +447,78 @@ def cleanup_temporary_files():
     except Exception as e:
         logger.warning(f"Error during temporary file cleanup: {e}")
 
-def initialize_components():
-    """Initialize transcriber, decoder, and profanity filter"""
+async def initialize_components():
+    """Initialize transcriber, decoder, and profanity filter with error handling"""
     global transcriber, decoder, profanity_filter
     
-    # Clean up any leftover temporary files first
-    cleanup_temporary_files()
+    try:
+        # Clean up any existing temporary files
+        cleanup_temporary_files()
+        
+        # Initialize transcriber
+        transcriber_config = config.get("transcription", {})
+        transcriber_type = transcriber_config.get("engine", "whisper")
+        
+        logger.info(f"Initializing {transcriber_type} transcriber...")
+        
+        if transcriber_type == "whisper":
+            transcriber = WhisperTranscriber(
+                model_name=transcriber_config.get("model", "tiny.en"),
+                language=transcriber_config.get("language", "en"),
+                config=config
+            )
+        elif transcriber_type == "vosk":
+            transcriber = VoskTranscriber(
+                model_path=transcriber_config.get("model_path", "vosk-model")
+            )
+        else:
+            raise ValueError(f"Unsupported transcriber type: {transcriber_type}")
+        
+        # Initialize decoder
+        logger.info("Initializing audio decoder...")
+        decoder = OpusDecoder()
+        
+        # Initialize profanity filter
+        logger.info("Initializing profanity filter...")
+        profanity_filter = create_default_filter()
+        
+        logger.info("All components initialized successfully")
+        
+    except Exception as e:
+        logger.error(f"Failed to initialize components: {e}")
+        raise
+
+async def cleanup_components():
+    """Clean up all components properly"""
+    global transcriber, decoder, profanity_filter
     
-    # Initialize transcriber
-    transcriber_config = config.get("transcriber", {})
-    transcriber_type = transcriber_config.get("type", "whisper")
-    
-    if transcriber_type == "whisper":
-        transcriber = WhisperTranscriber(
-            model_name=transcriber_config.get("model_name", "tiny.en"),
-            language=transcriber_config.get("language", "en"),
-            config=config
-        )
-    elif transcriber_type == "vosk":
-        transcriber = VoskTranscriber(
-            model_path=transcriber_config.get("model_path", "vosk-model")
-        )
-    else:
-        raise ValueError(f"Unsupported transcriber type: {transcriber_type}")
-    
-    # Initialize decoder
-    decoder = OpusDecoder()
-    
-    # Initialize profanity filter
-    profanity_filter = create_default_filter()
-    
-    logger.info("Components initialized successfully")
+    try:
+        if transcriber:
+            await transcriber.cleanup()
+            transcriber = None
+        
+        if decoder:
+            await decoder.cleanup()
+            decoder = None
+        
+        if profanity_filter:
+            profanity_filter = None
+        
+        logger.info("All components cleaned up successfully")
+        
+    except Exception as e:
+        logger.warning(f"Error during component cleanup: {e}")
 
 async def background_audio_processor(worker_id: int = 0):
-    """Background worker for processing audio transcription jobs"""
+    """
+    Background worker for processing audio transcription jobs
+    
+    Features:
+    - Robust error handling with retry logic
+    - Performance monitoring and statistics
+    - Graceful shutdown handling
+    - Resource cleanup
+    """
     logger.info(f"Worker {worker_id} started")
     
     while processing_active:
@@ -362,66 +526,97 @@ async def background_audio_processor(worker_id: int = 0):
             # Get job from queue with timeout
             job = await asyncio.wait_for(processing_queue.get(), timeout=1.0)
             
+            # Update worker status
             worker_stats[worker_id]["status"] = "processing"
-            logger.info(f"Worker {worker_id} processing job: {job['session_id']} from {job['player']}")
+            worker_stats[worker_id]["last_activity"] = datetime.now().isoformat()
             
-            # Process the job with retry logic
-            await process_audio_job_with_retry(job, worker_id)
+            session_id = job.get('session_id', 'unknown')
+            player = job.get('player', 'unknown')
             
-            # Mark job as done
-            processing_queue.task_done()
-            worker_stats[worker_id]["status"] = "idle"
+            logger.info(f"Worker {worker_id} processing job: {session_id} from {player}")
+            
+            # Process the job with comprehensive error handling
+            try:
+                await process_audio_job_with_retry(job, worker_id)
+                worker_stats[worker_id]["jobs_processed"] += 1
+                logger.debug(f"Worker {worker_id} completed job {session_id}")
+                
+            except Exception as e:
+                worker_stats[worker_id]["jobs_failed"] += 1
+                logger.error(f"Worker {worker_id} failed to process job {session_id}: {e}")
+                
+                # Store error result for the client
+                error_result = ProcessedResult(
+                    session_id=session_id,
+                    player=player,
+                    timestamp=job.get('timestamp', int(datetime.now().timestamp())),
+                    flagged=False,
+                    bad_words=[],
+                    transcript="",
+                    processing_time_ms=0,
+                    processed_at=datetime.now().strftime('%Y-%m-%dT%H:%M:%S.%fZ')[:-3] + 'Z',
+                    error=f"Processing failed: {str(e)}"
+                )
+                
+                try:
+                    await store_result(job.get('server_key', ''), error_result)
+                except Exception as store_error:
+                    logger.error(f"Failed to store error result: {store_error}")
+            
+            finally:
+                # Mark job as done and update worker status
+                processing_queue.task_done()
+                worker_stats[worker_id]["status"] = "idle"
+                worker_stats[worker_id]["last_activity"] = datetime.now().isoformat()
             
         except asyncio.TimeoutError:
             # No job available, continue polling
             continue
+            
+        except asyncio.CancelledError:
+            # Worker is being shut down
+            logger.info(f"Worker {worker_id} received shutdown signal")
+            break
+            
         except Exception as e:
-            logger.error(f"Worker {worker_id} error: {e}")
+            logger.error(f"Worker {worker_id} unexpected error: {e}")
             worker_stats[worker_id]["status"] = "error"
-            await asyncio.sleep(1)  # Brief pause before retrying
+            worker_stats[worker_id]["last_activity"] = datetime.now().isoformat()
+            
+            # Brief pause before retrying to avoid rapid error loops
+            await asyncio.sleep(1)
     
     logger.info(f"Worker {worker_id} stopped")
 
-async def process_audio_job_with_retry(job, worker_id: int):
-    """Process audio job with retry logic"""
+async def process_audio_job_with_retry(job: Dict[str, Any], worker_id: int):
+    """Process audio job with retry logic and timeout handling"""
     max_retries = config.get("processing", {}).get("retry_attempts", 2)
     retry_delay = config.get("processing", {}).get("retry_delay_seconds", 1)
     
     for attempt in range(max_retries + 1):
         try:
             await process_audio_job(job, worker_id)
-            worker_stats[worker_id]["jobs_processed"] += 1
-            return
+            return  # Success, exit retry loop
+            
+        except asyncio.TimeoutError:
+            logger.error(f"Worker {worker_id} job timeout on attempt {attempt + 1}")
+            if attempt == max_retries:
+                raise  # Final attempt failed
+            await asyncio.sleep(retry_delay * (attempt + 1))
             
         except Exception as e:
-            if attempt < max_retries:
-                logger.warning(f"Worker {worker_id} job retry {attempt + 1}/{max_retries} for {job['session_id']}: {e}")
-                await asyncio.sleep(retry_delay * (attempt + 1))  # Exponential backoff
-            else:
-                logger.error(f"Worker {worker_id} job failed after {max_retries} retries for {job['session_id']}: {e}")
-                worker_stats[worker_id]["jobs_failed"] += 1
-                
-                # Store error result
-                error_result = ProcessedResult(
-                    session_id=job['session_id'],
-                    player=job['player'],
-                    timestamp=job['timestamp'],
-                    flagged=False,
-                    bad_words=[],
-                    transcript="",
-                    processing_time_ms=0,
-                    processed_at=datetime.now().strftime('%Y-%m-%dT%H:%M:%S.%fZ')[:-3] + 'Z',
-                    error=f"Processing failed after {max_retries} retries: {str(e)}"
-                )
-                await store_result(job['server_key'], error_result)
+            logger.error(f"Worker {worker_id} job failed on attempt {attempt + 1}: {e}")
+            if attempt == max_retries:
+                raise  # Final attempt failed
+            await asyncio.sleep(retry_delay * (attempt + 1))
 
-async def process_audio_job(job, worker_id: int):
-    """Process a single audio transcription job"""
+async def process_audio_job(job: Dict[str, Any], worker_id: int):
+    """Process a single audio transcription job with comprehensive error handling"""
     start_time = asyncio.get_event_loop().time()
     
     try:
         # Add timeout for individual job processing
-        timeout = config.get("processing", {}).get("processing_timeout_seconds", 180)
+        timeout = config.get("processing", {}).get("timeout_seconds", 90)
         
         result = await asyncio.wait_for(
             _process_audio_job_internal(job, worker_id),
@@ -452,45 +647,67 @@ async def process_audio_job(job, worker_id: int):
         await store_result(job['server_key'], timeout_result)
         raise
 
-async def _process_audio_job_internal(job, worker_id: int):
-    """Internal job processing logic"""
+async def _process_audio_job_internal(job: Dict[str, Any], worker_id: int):
+    """Internal job processing logic with enhanced error handling and validation"""
     start_time = asyncio.get_event_loop().time()
     
-    session_id = job['session_id']
-    player = job['player']
-    timestamp = job['timestamp']
-    audio_data = job['audio_data']
-    profanity_words = job['profanity_words']
-    case_sensitive = job['case_sensitive']
-    partial_match = job['partial_match']
-    server_key = job['server_key']
+    # Extract job parameters with validation
+    session_id = job.get('session_id')
+    player = job.get('player')
+    timestamp = job.get('timestamp')
+    audio_data = job.get('audio_data')
+    profanity_words = job.get('profanity_words', [])
+    case_sensitive = job.get('case_sensitive', False)
+    partial_match = job.get('partial_match', True)
+    server_key = job.get('server_key')
     
-    # Decode base64 audio
+    # Validate required parameters
+    if not all([session_id, player, timestamp, audio_data, server_key]):
+        raise ValueError("Missing required job parameters")
+    
+    # Decode base64 audio with validation
     try:
         decoded_audio = base64.b64decode(audio_data)
-        logger.info(f"Decoded WAV file: {len(decoded_audio)} bytes")
+        logger.debug(f"Decoded WAV file: {len(decoded_audio)} bytes")
+        
+        # Validate audio data
+        if len(decoded_audio) < 44:
+            raise ValueError("Audio data too small (missing WAV header)")
+        
+        # Check for valid WAV header
+        if not (decoded_audio[0:4] == b'RIFF' and decoded_audio[8:12] == b'WAVE'):
+            raise ValueError("Invalid WAV file format")
+            
     except Exception as e:
-        logger.error(f"Failed to decode audio data: {e}")
-        raise
+        logger.error(f"Failed to decode/validate audio data: {e}")
+        raise ValueError(f"Invalid audio data: {e}")
     
-    # Transcribe audio
-    transcript = await transcriber.transcribe(decoded_audio)
+    # Transcribe audio with error handling
+    try:
+        transcript = await transcriber.transcribe(decoded_audio)
+        logger.debug(f"Transcription result: '{transcript}'")
+        
+    except Exception as e:
+        logger.error(f"Transcription failed: {e}")
+        raise ValueError(f"Transcription error: {e}")
     
     # Check for profanity
     flagged_words = []
-    logger.info(f"Profanity check - transcript: '{transcript}', profanity_words: {profanity_words} (count: {len(profanity_words)})")
-    
     if transcript and profanity_words:
-        # Create temporary profanity filter for this request
-        temp_filter = ProfanityFilter(
-            words=profanity_words,
-            case_sensitive=case_sensitive,
-            partial_match=partial_match
-        )
-        flagged_words = temp_filter.check_text(transcript)
-        logger.info(f"Profanity filter result: {flagged_words} (flagged: {bool(flagged_words)})")
-    else:
-        logger.info(f"Skipping profanity check - transcript empty: {not transcript}, profanity_words empty: {not profanity_words}")
+        try:
+            # Create temporary profanity filter for this request
+            temp_filter = ProfanityFilter(
+                words=profanity_words,
+                case_sensitive=case_sensitive,
+                partial_match=partial_match
+            )
+            flagged_words = temp_filter.check_text(transcript)
+            
+            logger.debug(f"Profanity check: {len(flagged_words)} words flagged")
+            
+        except Exception as e:
+            logger.error(f"Profanity filtering failed: {e}")
+            # Continue processing without profanity check
     
     processing_time = int((asyncio.get_event_loop().time() - start_time) * 1000)
     
@@ -500,7 +717,7 @@ async def _process_audio_job_internal(job, worker_id: int):
     
     logger.info(f"Transcribed '{transcript}' for {player} in {processing_time}ms")
     
-    # Store result
+    # Create and store result
     result = ProcessedResult(
         session_id=session_id,
         player=player,
@@ -513,6 +730,7 @@ async def _process_audio_job_internal(job, worker_id: int):
     )
     
     await store_result(server_key, result)
+    return result
 
 async def store_result(server_key, result: ProcessedResult):
     """Store transcription result in memory for web API polling"""
@@ -545,12 +763,13 @@ async def health_check():
             "profanity_filter": profanity_filter is not None
         },
         "config": {
-            "transcriber_type": config.get("transcriber", {}).get("type", "unknown"),
+            "transcriber_type": config.get("transcription", {}).get("engine", "unknown"),
             "profanity_words_count": len(config.get("profanity", {}).get("words", []))
         },
         "timestamp": datetime.now().isoformat(),
         "version": "1.0.0"
     }
+
 
 @app.post("/transcribe", response_model=QueueResponse, dependencies=[Depends(check_rate_limit)])
 async def queue_audio_transcription(request: TranscribeRequest, key: str = Depends(get_api_key)):
@@ -559,8 +778,7 @@ async def queue_audio_transcription(request: TranscribeRequest, key: str = Depen
     Returns immediately - results available via file polling
     """
     try:
-        # Validate API key first
-        if config.get("server", {}).get("auth", {}).get("api_keys") and key not in config["server"]["auth"]["api_keys"]:
+        if config.get("security", {}).get("api_keys") and key not in config["security"]["api_keys"]:
             raise HTTPException(status_code=HTTP_403_FORBIDDEN, detail="Invalid API key")
         
         extra_info = ""
@@ -570,20 +788,13 @@ async def queue_audio_transcription(request: TranscribeRequest, key: str = Depen
             extra_info += f", duration: {request.duration_ms}ms"
         
         logger.info(f"Queueing WAV audio from player: {request.player} (session: {request.session_id}){extra_info}")
-        
-        # Debug: Log profanity words received
         logger.info(f"Profanity words received: {request.profanity_words} (count: {len(request.profanity_words)})")
         logger.info(f"Case sensitive: {request.case_sensitive}, Partial match: {request.partial_match}")
-        
-        # Validate audio format
         if request.audio_format.lower() != "wav":
             raise HTTPException(status_code=400, detail="Only WAV audio format is supported")
         
-        # Validate server key
         if not request.server_key or len(request.server_key) < 8:
             raise HTTPException(status_code=400, detail="Invalid server key")
-        
-        # Decode base64 WAV data
         try:
             wav_data = base64.b64decode(request.audio_data)
             logger.info(f"Decoded WAV file: {len(wav_data)} bytes")
@@ -591,17 +802,11 @@ async def queue_audio_transcription(request: TranscribeRequest, key: str = Depen
             logger.error(f"Failed to decode base64 WAV data: {e}")
             raise HTTPException(status_code=400, detail="Invalid base64 WAV data")
         
-        # Validate WAV file header
         if len(wav_data) < 44:
             raise HTTPException(status_code=400, detail="WAV file too small (missing header)")
         
         if not (wav_data[0:4] == b'RIFF' and wav_data[8:12] == b'WAVE'):
             raise HTTPException(status_code=400, detail="Invalid WAV file header")
-        
-        # WAV file saving permanently disabled for privacy/security
-        # Audio data is processed in memory only - no persistent storage
-        
-        # Create job for background processing
         job = {
             'session_id': request.session_id,
             'player': request.player,
@@ -615,7 +820,6 @@ async def queue_audio_transcription(request: TranscribeRequest, key: str = Depen
             'duration_ms': request.duration_ms
         }
         
-        # Check queue size and reject if too full
         current_queue_size = processing_queue.qsize()
         max_queue_size = config.get("processing", {}).get("max_queue_size", 2000)
         
@@ -626,13 +830,10 @@ async def queue_audio_transcription(request: TranscribeRequest, key: str = Depen
                 detail=f"Queue is full ({current_queue_size}/{max_queue_size}). Please try again later."
             )
         
-        # Add to processing queue
         await processing_queue.put(job)
         queue_size = processing_queue.qsize()
-        
-        # Estimate wait time based on queue position and concurrent workers
         max_workers = config.get("processing", {}).get("max_concurrent_jobs", 10)
-        estimated_wait = max(1, queue_size // max_workers) * 2  # Rough estimate
+        estimated_wait = max(1, queue_size // max_workers) * 2
         
         logger.info(f"Queued audio job {request.session_id} for {request.player} (queue size: {queue_size})")
         
@@ -658,10 +859,8 @@ async def get_pending_results(key: str = Query(..., description="Server key for 
         if not key or len(key) < 8:
             raise HTTPException(status_code=400, detail="Invalid server key")
         
-        # URL decode the server key since it gets encoded in HTTP requests
         decoded_key = unquote(key)
         
-        # Debug logging to understand the key lookup issue
         logger.info(f"Looking up results for key: '{decoded_key}' (original: '{key}', length: {len(decoded_key)})")
         logger.info(f"Available server keys in storage: {list(results_storage.keys())}")
         
@@ -688,38 +887,56 @@ async def get_pending_results(key: str = Query(..., description="Server key for 
         logger.error(f"Error getting results: {e}")
         raise HTTPException(status_code=500, detail="Failed to get results")
 
-@app.post("/removeresult")
-async def remove_processed_results(request: CleanupRequest, key: str = Query(..., description="Server key for authentication")):
+@app.get("/removeresult")
+@app.post("/removeresult") 
+@app.delete("/removeresult")
+async def remove_processed_results_all_methods(
+    request: Request,
+    server_key: str = Query(None, description="Server key for authentication"),
+    key: str = Query(None, description="Alternative server key parameter"),
+    session_ids: str = Query(None, description="Comma-separated session IDs to remove")
+):
     """
-    Remove processed results from storage after plugin has handled them
+    Remove processed results from storage - supports GET, POST, and DELETE methods
     """
     try:
-        if not key or len(key) < 8:
-            raise HTTPException(status_code=400, detail="Invalid server key in URL")
+        method = request.method
+        logger.info(f"{method} cleanup request received - key param: {key}, server_key param: {server_key}, session_ids: {session_ids}")
         
-        # URL decode the server key since it gets encoded in HTTP requests
-        decoded_key = unquote(key)
+        # Use either server_key or key parameter
+        auth_key = server_key or key
         
-        if not request.server_key or len(request.server_key) < 8:
-            raise HTTPException(status_code=400, detail="Invalid server key in body")
+        if not auth_key or len(auth_key) < 8:
+            logger.error(f"Invalid server key - auth_key: {auth_key}")
+            raise HTTPException(status_code=400, detail="Invalid server key - provide either 'key' or 'server_key' parameter")
         
-        # Verify URL key matches body key for security
-        if decoded_key != request.server_key:
-            raise HTTPException(status_code=400, detail="Server key mismatch")
+        decoded_key = unquote(auth_key)
+        
+        logger.info(f"{method} cleanup request - decoded key: {decoded_key}, session_ids: {session_ids}")
         
         if decoded_key not in results_storage:
+            logger.warning(f"No results found for server key: {decoded_key}")
             return {"removed": 0, "message": "No results found for server key", "remaining": 0}
         
-        removed_count = 0
         server_results = results_storage[decoded_key]
+        if not session_ids:
+            removed_count = len(server_results)
+            del results_storage[decoded_key]
+            logger.info(f"Removed ALL {removed_count} processed results for server {decoded_key}")
+            return {
+                "removed": removed_count,
+                "remaining": 0,
+                "message": f"Successfully removed all {removed_count} processed results"
+            }
         
-        # Remove requested session IDs
-        for session_id in request.session_ids:
+        session_id_list = [sid.strip() for sid in session_ids.split(",") if sid.strip()]
+        
+        removed_count = 0
+        for session_id in session_id_list:
             if session_id in server_results:
                 del server_results[session_id]
                 removed_count += 1
         
-        # Clean up empty server storage
         remaining_count = len(server_results)
         if remaining_count == 0:
             del results_storage[decoded_key]
@@ -742,7 +959,6 @@ async def get_stats(key: str = Depends(get_api_key)):
     queue_size = processing_queue.qsize()
     total_results = sum(len(results) for results in results_storage.values())
     
-    # Calculate worker statistics
     active_workers = sum(1 for stats in worker_stats.values() if stats["status"] == "processing")
     total_processed = sum(stats["jobs_processed"] for stats in worker_stats.values())
     total_failed = sum(stats["jobs_failed"] for stats in worker_stats.values())
@@ -762,33 +978,25 @@ async def get_stats(key: str = Depends(get_api_key)):
             "success_rate": f"{(total_processed / max(1, total_processed + total_failed)) * 100:.1f}%"
         },
         "processing": {
-            "timeout_seconds": config.get("processing", {}).get("processing_timeout_seconds", 180),
+            "timeout_seconds": config.get("processing", {}).get("timeout_seconds", 90),
             "retry_attempts": config.get("processing", {}).get("retry_attempts", 2),
             "max_concurrent_jobs": config.get("processing", {}).get("max_concurrent_jobs", 25)
         }
     }
 
 if __name__ == "__main__":
-    # Parse command line arguments
     parser = argparse.ArgumentParser()
-    parser.add_argument('--host', type=str, default=None,
-                      help='Host to bind to')
-    parser.add_argument('--port', type=int, default=None,
-                      help='Port to bind to')
-    parser.add_argument('--workers', type=int, default=None,
-                      help='Number of HTTP worker processes')
+    parser.add_argument('--host', type=str, default=None, help='Host to bind to')
+    parser.add_argument('--port', type=int, default=None, help='Port to bind to')
+    parser.add_argument('--workers', type=int, default=None, help='Number of HTTP worker processes')
     args = parser.parse_args()
     
-    # Load configuration
     load_config()
     
-    # Get server config with command line overrides
     server_config = config.get("server", {})
     host = args.host or server_config.get("host", "0.0.0.0")
     port = args.port or server_config.get("port", 8000)
     workers = args.workers or server_config.get("workers", 1)
-    
-    # Run the server
     uvicorn.run(
         "main:app",
         host=host,

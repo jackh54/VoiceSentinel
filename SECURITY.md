@@ -23,7 +23,7 @@ Please include the following in your report:
 
 - Initial response: Within 48 hours
 - Status update: Within 5 business days
-- Fix timeline: Depends on complexity, typically within 30 days
+- Fix timeline: Depends on complexity, typically within 3 days
 
 ### Scope
 
@@ -49,14 +49,6 @@ We consider security research conducted under this policy as "authorized" and wi
 - Do not exploit a security issue for purposes other than verification
 - Report any vulnerability found through our reporting process
 
-### Bug Bounty
-
-Currently, we do not offer a paid bug bounty program. However, we will:
-
-1. Acknowledge your contribution in our security advisory
-2. Add you to our security hall of fame (if you wish)
-3. Provide a detailed write-up of how we fixed the issue (after the fix is deployed)
-
 ## Supported Versions
 
 | Version | Supported          |
@@ -71,7 +63,7 @@ When deploying VoiceSentinel:
 2. Keep all dependencies updated
 3. Monitor system logs regularly
 4. Follow the principle of least privilege
-5. Use secure communication channels (HTTPS/WSS)
+5. Use secure communication channels (HTTPS)
 6. Implement rate limiting
 7. Regular security audits
 
@@ -86,10 +78,6 @@ VoiceSentinel includes several security features:
 - Input validation and sanitization
 - Configurable access controls
 
-## Recent Security Updates
-
-Security updates will be listed here as they are released.
-
 ## Contact
 
 - Security: [security@pandadevv.dev](mailto:security@pandadevv.dev)
@@ -97,4 +85,4 @@ Security updates will be listed here as they are released.
 
 ---
 
-Last updated: 2025-07-11
+Last updated: 2025-07-16

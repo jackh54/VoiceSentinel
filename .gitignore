@@ -103,6 +103,7 @@ docker-compose.override.yml
 # Models and Data
 processor-voicesentinel/models/
 processor-voicesentinel/data/
+processor-voicesentinel/config.json
 *.bin
 *.model
 *.onnx
@@ -113,11 +114,6 @@ processor-voicesentinel/data/
 logs/
 processor-voicesentinel/logs/
 
-# Configuration (keep templates)
-plugin-voicesentinel/config.yml
-processor-voicesentinel/config.json
-!processor-voicesentinel/config.json.template
-!plugin-voicesentinel/config.yml.template
 
 # Audio files
 *.wav
@@ -206,6 +202,5 @@ local.properties
 /nbdist/
 /.nb-gradle/ 
 
-
-# plugin (its closed source, go buy it!!)
+# plugin is closed source (go buy it!!)
 plugin-voicesentinel/

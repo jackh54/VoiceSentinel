@@ -7,8 +7,9 @@ uvicorn[standard]==0.35.0
 pydantic==2.5.0
 
 # Audio processing - CPU optimized (Docker compatible)
-torch==2.7.1 --extra-index-url https://download.pytorch.org/whl/cpu
-torchaudio==2.7.1 --extra-index-url https://download.pytorch.org/whl/cpu
+# Using compatible versions to avoid triton conflict
+torch==2.1.2 --extra-index-url https://download.pytorch.org/whl/cpu
+torchaudio==2.1.2 --extra-index-url https://download.pytorch.org/whl/cpu
 openai-whisper==20231117
 
 # Audio handling
