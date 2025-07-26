@@ -912,7 +912,8 @@ async def remove_processed_results_all_methods(
         
         decoded_key = unquote(auth_key)
         
-        logger.info(f"{method} cleanup request - decoded key: {decoded_key}, session_ids: {session_ids}")
+        redacted_key = decoded_key[:4] + "***" if decoded_key else "N/A"
+        logger.info(f"{method} cleanup request - decoded key: {redacted_key}, session_ids: {session_ids}")
         
         if decoded_key not in results_storage:
             logger.warning("No results found for provided server key (key redacted)")
