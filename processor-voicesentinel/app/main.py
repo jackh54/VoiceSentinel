@@ -922,7 +922,7 @@ async def remove_processed_results_all_methods(
         if not session_ids:
             removed_count = len(server_results)
             del results_storage[decoded_key]
-            logger.info(f"Removed ALL {removed_count} processed results for server {decoded_key}")
+            logger.info(f"Removed ALL {removed_count} processed results for server (key redacted)")
             return {
                 "removed": removed_count,
                 "remaining": 0,
