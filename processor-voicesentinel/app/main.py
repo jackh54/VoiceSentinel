@@ -915,7 +915,7 @@ async def remove_processed_results_all_methods(
         logger.info(f"{method} cleanup request - decoded key: {decoded_key}, session_ids: {session_ids}")
         
         if decoded_key not in results_storage:
-            logger.warning(f"No results found for server key: {decoded_key}")
+            logger.warning("No results found for provided server key (key redacted)")
             return {"removed": 0, "message": "No results found for server key", "remaining": 0}
         
         server_results = results_storage[decoded_key]
