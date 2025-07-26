@@ -941,7 +941,7 @@ async def remove_processed_results_all_methods(
         if remaining_count == 0:
             del results_storage[decoded_key]
         
-        logger.info(f"Removed {removed_count} processed results for server {decoded_key}, {remaining_count} remaining")
+        logger.info(f"Removed {removed_count} processed results for server, {remaining_count} remaining")
         
         return {
             "removed": removed_count,
