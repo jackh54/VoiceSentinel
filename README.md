@@ -219,9 +219,9 @@ See the full license in the [LICENSE](LICENSE) file.
 
 ## 🆘 Support
 
-- **Documentation**: soon
+- **Documentation**: [Gitbook](https://pandascript.gitbook.io/pandascript/voicesentinel-processor)
 - **Discord**: [Join our community](https://discord.gg/JAJyuzdgHZ)
-- **Issues**: [GitHub Issues](https://github.com/jackh54/VoiceSentinel/issues)
+- **Issues**: [GitHub Issues (processor related issues only)](https://github.com/jackh54/VoiceSentinel/issues)
 - **Security**:security@pandadevv.dev](mailto:security@pandadevv.dev)
 
 ## 🗺️ Roadmap
@@ -233,7 +233,7 @@ See the full license in the [LICENSE](LICENSE) file.
 - [ ] Improved profanity detection
 - [ ] Web dashboard (maybe?)
 - [ ] Player reputation system (initial version)
-- [ ] Proper Pterodactyl Egg setup (current egg shouldn't be used for production)
+- [ ] Proper Pterodactyl Egg setup (current egg shouldn't be used for production, use a python egg)
 
 ### Technical Improvements
 
