@@ -4,10 +4,16 @@
     "port": 8000,
     "workers": 4,
     "cors": {
-      "allow_origins": ["*"],
+      "allow_origins": ["<your-transcriber-url>"],
       "allow_credentials": true,
-      "allow_methods": ["*"],
-      "allow_headers": ["*"]
+      "allow_methods": ["GET", "POST", "DELETE"],
+      "allow_headers": [
+        "Content-Type", 
+        "Authorization", 
+        "Accept",
+        "User-Agent",
+        "X-Requested-With"
+      ]
     }
   },
   "security": {
