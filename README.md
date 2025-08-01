@@ -1,9 +1,10 @@
 # VoiceSentinel
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![DMCA.com Protection Status](https://images.dmca.com/Badges/dmca-badge-w100-5x1-01.png?ID=29324560-3885-4048-a05b-f106d721df36)](https://www.dmca.com/r/zz2wk5w)
 [![Java](https://img.shields.io/badge/Java-17orange.svg)](https://www.oracle.com/java/)
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![Minecraft](https://img.shields.io/badge/Minecraft-1.21+-green.svg)](https://www.minecraft.net/)
+
 
 VoiceSentinel is a comprehensive real-time voice moderation system for Minecraft servers using Simple Voice Chat. It combines a Java-based Minecraft plugin with a Python backend processor to provide advanced speech-to-text transcription and content filtering capabilities.
 
