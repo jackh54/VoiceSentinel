@@ -209,7 +209,13 @@ pip install -e .
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the **VoiceSentinel Source-Available License v1.0**.  
+You are free to view and contribute to the code, but **you may not use, redistribute, or incorporate it in your own projects**, commercially or non-commercially, without explicit permission.
+
+**Unauthorized use will result in DMCA takedowns and legal action.**
+
+See the full license in the [LICENSE](LICENSE) file.
+
 
 ## 🆘 Support
 
