@@ -12,7 +12,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from app.transcriber import WhisperTranscriber
-from app.profanity import create_default_filter
+from app.profanity import create_default_filter, ProfanityFilter
 
 logging.basicConfig(
     level=logging.INFO,
@@ -115,15 +115,25 @@ class SimpleWebSocketManager:
             })
             if self.transcriber:
                 transcript = await self.transcriber.transcribe(audio_data)
-                is_profane = False
-                if self.profanity_filter and transcript:
-                    is_profane = self.profanity_filter.contains_profanity(transcript, profanity_words)
-            
+
+                # Profanity detection using provided words + default filter words
+                flagged_words = []
+                if transcript:
+                    combined_words = set(profanity_words or [])
+                    if self.profanity_filter and hasattr(self.profanity_filter, 'words'):
+                        try:
+                            combined_words |= set(self.profanity_filter.words)
+                        except Exception:
+                            pass
+                    temp_filter = ProfanityFilter(words=list(combined_words), case_sensitive=False, partial_match=True)
+                    flagged_words = temp_filter.check_text(transcript)
+                is_profane = len(flagged_words) > 0
+
                 await self.send_message(client_id, {
-                    "type": "transcription_result",
-                    "transcript": transcript,
-                    "is_profane": is_profane,
-                    "status": "completed"
+                    "type": "final_transcript",
+                    "transcript": transcript or "",
+                    "flagged": is_profane,
+                    "bad_words": flagged_words
                 })
                 
                 return transcript, is_profane
