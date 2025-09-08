@@ -45,8 +45,7 @@ def get_default_config():
     return {
         "server": {
             "host": "0.0.0.0",
-            "port": 8000,
-            "websocket_port": 8001
+            "port": 8000
         },
         "transcription": {
             "engine": "whisper",
@@ -115,8 +114,6 @@ class SimpleWebSocketManager:
             })
             if self.transcriber:
                 transcript = await self.transcriber.transcribe(audio_data)
-
-                # Profanity detection using provided words + default filter words
                 flagged_words = []
                 if transcript:
                     combined_words = set(profanity_words or [])
@@ -133,7 +130,9 @@ class SimpleWebSocketManager:
                     "type": "final_transcript",
                     "transcript": transcript or "",
                     "flagged": is_profane,
-                    "bad_words": flagged_words
+                    "bad_words": flagged_words,
+                    "player": client_id,
+                    "session_id": client_id
                 })
                 
                 return transcript, is_profane
@@ -164,7 +163,6 @@ async def lifespan(app: FastAPI):
     finally:
         logger.info("Application shutting down")
 
-# Load configuration first
 config = load_config()
 
 app = FastAPI(
@@ -174,7 +172,7 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Add CORS middleware based on configuration
+
 cors_config = config.get("cors", {})
 app.add_middleware(
     CORSMiddleware,
@@ -207,10 +205,36 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
     try:
         while True:
             data = await websocket.receive_json()
+            message_type = data.get("type", "")
             
-            if data.get("type") == "audio_chunk":
+            if message_type == "auth":
+                server_key = data.get("server_key", "")
+                if server_key and len(server_key) >= 16:
+                    await ws_manager.send_message(client_id, {
+                        "type": "auth_success",
+                        "message": "Authentication successful"
+                    })
+                    logger.info(f"Client {client_id} authenticated successfully")
+                else:
+                    await ws_manager.send_message(client_id, {
+                        "type": "auth_failed",
+                        "reason": "Invalid server key"
+                    })
+                    logger.warning(f"Client {client_id} authentication failed")
+                    
+            elif message_type == "audio_chunk":
                 audio_b64 = data.get("audio_data", "")
-                profanity_words = data.get("profanity_words", [])
+                profanity_words_raw = data.get("profanity_words", [])
+                
+                profanity_words = []
+                if isinstance(profanity_words_raw, str):
+                    try:
+                        import json
+                        profanity_words = json.loads(profanity_words_raw)
+                    except:
+                        profanity_words = []
+                elif isinstance(profanity_words_raw, list):
+                    profanity_words = profanity_words_raw
                 
                 if audio_b64:
                     try:
@@ -224,6 +248,12 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                             "message": "Invalid audio data",
                             "status": "error"
                         })
+                        
+            elif message_type == "ping":
+                await ws_manager.send_message(client_id, {
+                    "type": "pong",
+                    "timestamp": data.get("timestamp", 0)
+                })
             
     except WebSocketDisconnect:
         ws_manager.disconnect(client_id)
