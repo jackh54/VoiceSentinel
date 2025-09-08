@@ -112,8 +112,30 @@ class SimpleWebSocketManager:
                 "type": "status",
                 "status": "processing"
             })
+            
+            # Process audio in background to avoid blocking WebSocket
+            import asyncio
+            asyncio.create_task(self._process_audio_async(client_id, audio_data, profanity_words))
+            
+        except Exception as e:
+            logger.error(f"Audio processing failed for {client_id}: {e}")
+            await self.send_message(client_id, {
+                "type": "error",
+                "message": str(e),
+                "status": "error"
+            })
+    
+    async def _process_audio_async(self, client_id: str, audio_data: bytes, profanity_words: list):
+        """Process audio asynchronously without blocking WebSocket"""
+        try:
             if self.transcriber:
-                transcript = await self.transcriber.transcribe(audio_data)
+                # Add timeout to prevent hanging
+                transcript = await asyncio.wait_for(
+                    self.transcriber.transcribe(audio_data),
+                    timeout=30.0  # 30 second timeout
+                )
+
+                # Profanity detection using provided words + default filter words
                 flagged_words = []
                 if transcript:
                     combined_words = set(profanity_words or [])
@@ -131,14 +153,22 @@ class SimpleWebSocketManager:
                     "transcript": transcript or "",
                     "flagged": is_profane,
                     "bad_words": flagged_words,
-                    "player": client_id,
-                    "session_id": client_id
+                    "player": client_id,  # Add player info for plugin compatibility
+                    "session_id": client_id  # Add session info for plugin compatibility
                 })
                 
-                return transcript, is_profane
+                logger.info(f"Audio processing completed for {client_id}: '{transcript}' (flagged: {is_profane})")
+                
             else:
                 raise Exception("Transcriber not initialized")
                 
+        except asyncio.TimeoutError:
+            logger.error(f"Audio processing timed out for {client_id}")
+            await self.send_message(client_id, {
+                "type": "error",
+                "message": "Audio processing timed out",
+                "status": "error"
+            })
         except Exception as e:
             logger.error(f"Audio processing failed for {client_id}: {e}")
             await self.send_message(client_id, {
@@ -146,7 +176,6 @@ class SimpleWebSocketManager:
                 "message": str(e),
                 "status": "error"
             })
-            return None, False
 
 ws_manager = SimpleWebSocketManager()
 
