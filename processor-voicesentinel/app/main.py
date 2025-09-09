@@ -106,16 +106,15 @@ class SimpleWebSocketManager:
                 logger.error(f"Failed to send message to {client_id}: {e}")
                 self.disconnect(client_id)
     
-    async def process_audio(self, client_id: str, audio_data: bytes, profanity_words: list):
+    async def process_audio(self, client_id: str, audio_data: bytes, profanity_words: list, player_name: str = None, session_id: str = None):
         try:
             await self.send_message(client_id, {
                 "type": "status",
                 "status": "processing"
             })
             
-            # Process audio in background to avoid blocking WebSocket
             import asyncio
-            asyncio.create_task(self._process_audio_async(client_id, audio_data, profanity_words))
+            asyncio.create_task(self._process_audio_async(client_id, audio_data, profanity_words, player_name, session_id))
             
         except Exception as e:
             logger.error(f"Audio processing failed for {client_id}: {e}")
@@ -125,17 +124,15 @@ class SimpleWebSocketManager:
                 "status": "error"
             })
     
-    async def _process_audio_async(self, client_id: str, audio_data: bytes, profanity_words: list):
+    async def _process_audio_async(self, client_id: str, audio_data: bytes, profanity_words: list, player_name: str = None, session_id: str = None):
         """Process audio asynchronously without blocking WebSocket"""
         try:
             if self.transcriber:
-                # Add timeout to prevent hanging
                 transcript = await asyncio.wait_for(
                     self.transcriber.transcribe(audio_data),
-                    timeout=30.0  # 30 second timeout
+                    timeout=30.0
                 )
 
-                # Profanity detection using provided words + default filter words
                 flagged_words = []
                 if transcript:
                     combined_words = set(profanity_words or [])
@@ -148,16 +145,20 @@ class SimpleWebSocketManager:
                     flagged_words = temp_filter.check_text(transcript)
                 is_profane = len(flagged_words) > 0
 
+                # Use player_name if provided, otherwise fallback to client_id
+                actual_player_name = player_name if player_name else client_id
+                actual_session_id = session_id if session_id else client_id
+
                 await self.send_message(client_id, {
                     "type": "final_transcript",
                     "transcript": transcript or "",
                     "flagged": is_profane,
                     "bad_words": flagged_words,
-                    "player": client_id,  # Add player info for plugin compatibility
-                    "session_id": client_id  # Add session info for plugin compatibility
+                    "player": actual_player_name,
+                    "session_id": actual_session_id
                 })
                 
-                logger.info(f"Audio processing completed for {client_id}: '{transcript}' (flagged: {is_profane})")
+                logger.info(f"Audio processing completed for {actual_player_name}: '{transcript}' (flagged: {is_profane})")
                 
             else:
                 raise Exception("Transcriber not initialized")
@@ -254,6 +255,8 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
             elif message_type == "audio_chunk":
                 audio_b64 = data.get("audio_data", "")
                 profanity_words_raw = data.get("profanity_words", [])
+                player_name = data.get("player", client_id)  # Use player name from request, fallback to client_id
+                session_id = data.get("session_id", client_id)  # Use session_id from request, fallback to client_id
                 
                 profanity_words = []
                 if isinstance(profanity_words_raw, str):
@@ -269,7 +272,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                     try:
                         import base64
                         audio_bytes = base64.b64decode(audio_b64)
-                        await ws_manager.process_audio(client_id, audio_bytes, profanity_words)
+                        await ws_manager.process_audio(client_id, audio_bytes, profanity_words, player_name, session_id)
                     except Exception as e:
                         logger.error(f"Failed to decode audio data: {e}")
                         await ws_manager.send_message(client_id, {
