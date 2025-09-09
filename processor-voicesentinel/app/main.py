@@ -5,6 +5,7 @@ import sys
 import json
 import logging
 import asyncio
+import time
 from contextlib import asynccontextmanager
 from typing import Dict, Any
 
@@ -73,6 +74,17 @@ class SimpleWebSocketManager:
         self.active_connections = {}
         self.transcriber = None
         self.profanity_filter = None
+        
+        # Voice Activity Detection system
+        self.audio_buffers = {}
+        self.recording_sessions = {}
+        self.recording_timers = {}
+        self.buffer_metadata = {}
+        
+        # VAD configuration
+        self.min_talking_time_ms = 500
+        self.max_recording_duration_seconds = 30
+        self.end_threshold_packets = 5
     
     async def initialize(self, config):
         try:
@@ -83,7 +95,14 @@ class SimpleWebSocketManager:
                 config=config
             )
             self.profanity_filter = create_default_filter()
-            logger.info("WebSocket manager initialized successfully")
+            
+            # Load VAD configuration
+            voice_detection = config.get("voice_detection", {})
+            self.min_talking_time_ms = voice_detection.get("min_talking_time_ms", 500)
+            self.max_recording_duration_seconds = voice_detection.get("max_recording_duration_seconds", 30)
+            self.end_threshold_packets = voice_detection.get("end_threshold_packets", 5)
+            
+            logger.info(f"WebSocket manager initialized with VAD: min_talking={self.min_talking_time_ms}ms, max_duration={self.max_recording_duration_seconds}s")
         except Exception as e:
             logger.error(f"Failed to initialize WebSocket manager: {e}")
             raise
@@ -96,7 +115,18 @@ class SimpleWebSocketManager:
     def disconnect(self, client_id: str):
         if client_id in self.active_connections:
             del self.active_connections[client_id]
-            logger.info(f"Client {client_id} disconnected")
+        
+        if client_id in self.audio_buffers:
+            del self.audio_buffers[client_id]
+        if client_id in self.recording_sessions:
+            del self.recording_sessions[client_id]
+        if client_id in self.recording_timers:
+            self.recording_timers[client_id].cancel()
+            del self.recording_timers[client_id]
+        if client_id in self.buffer_metadata:
+            del self.buffer_metadata[client_id]
+        
+        logger.info(f"Client {client_id} disconnected")
     
     async def send_message(self, client_id: str, message: dict):
         if client_id in self.active_connections:
@@ -107,14 +137,39 @@ class SimpleWebSocketManager:
                 self.disconnect(client_id)
     
     async def process_audio(self, client_id: str, audio_data: bytes, profanity_words: list, player_name: str = None, session_id: str = None):
+        """Process audio with Voice Activity Detection"""
         try:
-            await self.send_message(client_id, {
-                "type": "status",
-                "status": "processing"
-            })
+            self.buffer_metadata[client_id] = {
+                'player_name': player_name,
+                'session_id': session_id,
+                'profanity_words': profanity_words
+            }
             
-            import asyncio
-            asyncio.create_task(self._process_audio_async(client_id, audio_data, profanity_words, player_name, session_id))
+            if client_id not in self.recording_sessions:
+                self.recording_sessions[client_id] = {
+                    'is_recording': False,
+                    'start_time': None,
+                    'last_audio_time': None,
+                    'silence_packets': 0,
+                    'total_duration': 0
+                }
+                self.audio_buffers[client_id] = b''
+            
+            session = self.recording_sessions[client_id]
+            current_time = time.time()
+            self.audio_buffers[client_id] += audio_data
+            session['last_audio_time'] = current_time
+            audio_duration = self._estimate_audio_duration(audio_data)
+            session['total_duration'] += audio_duration
+            
+            if not session['is_recording']:
+                if session['total_duration'] >= self.min_talking_time_ms:
+                    logger.info(f"Voice detected for {client_id}, starting recording (duration: {session['total_duration']:.1f}ms)")
+                    await self._start_recording(client_id)
+                else:
+                    logger.debug(f"Building audio for {client_id}: {session['total_duration']:.1f}ms/{self.min_talking_time_ms}ms")
+            else:
+                await self._check_recording_end(client_id)
             
         except Exception as e:
             logger.error(f"Audio processing failed for {client_id}: {e}")
@@ -123,6 +178,106 @@ class SimpleWebSocketManager:
                 "message": str(e),
                 "status": "error"
             })
+    
+    async def process_audio_final(self, client_id: str, audio_data: bytes, profanity_words: list, player_name: str = None, session_id: str = None):
+        """Process final audio chunk - end recording and process immediately"""
+        try:
+            if client_id in self.recording_sessions:
+                await self._end_recording(client_id, force=True)
+            
+            if client_id in self.audio_buffers and self.audio_buffers[client_id]:
+                combined_audio = self.audio_buffers[client_id] + audio_data
+                self.audio_buffers[client_id] = b''
+                await self._process_audio_async(client_id, combined_audio, profanity_words, player_name, session_id)
+            else:
+                await self._process_audio_async(client_id, audio_data, profanity_words, player_name, session_id)
+            
+        except Exception as e:
+            logger.error(f"Final audio processing failed for {client_id}: {e}")
+            await self.send_message(client_id, {
+                "type": "error",
+                "message": str(e),
+                "status": "error"
+            })
+    
+    async def _start_recording(self, client_id: str):
+        """Start a new recording session"""
+        session = self.recording_sessions[client_id]
+        session['is_recording'] = True
+        session['start_time'] = time.time()
+        session['silence_packets'] = 0
+        import asyncio
+        self.recording_timers[client_id] = asyncio.create_task(
+            self._max_duration_timeout(client_id)
+        )
+        
+        logger.info(f"Started recording for {client_id}")
+    
+    async def _check_recording_end(self, client_id: str):
+        """Check if recording should end based on silence or duration"""
+        session = self.recording_sessions[client_id]
+        current_time = time.time()
+        if session['last_audio_time'] and (current_time - session['last_audio_time']) > 0.5:  # 500ms silence
+            session['silence_packets'] += 1
+            if session['silence_packets'] >= self.end_threshold_packets:
+                await self._end_recording(client_id)
+        else:
+            session['silence_packets'] = 0
+    
+    async def _end_recording(self, client_id: str, force: bool = False):
+        """End current recording and process the audio"""
+        if client_id not in self.recording_sessions or not self.recording_sessions[client_id]['is_recording']:
+            return
+        
+        session = self.recording_sessions[client_id]
+        session['is_recording'] = False
+        
+        if client_id in self.recording_timers:
+            self.recording_timers[client_id].cancel()
+            del self.recording_timers[client_id]
+        
+        if client_id in self.audio_buffers and self.audio_buffers[client_id]:
+            audio_data = self.audio_buffers[client_id]
+            self.audio_buffers[client_id] = b''
+            metadata = self.buffer_metadata.get(client_id, {})
+            player_name = metadata.get('player_name')
+            session_id = metadata.get('session_id')
+            profanity_words = metadata.get('profanity_words', [])
+            
+            await self._process_audio_async(client_id, audio_data, profanity_words, player_name, session_id)
+            
+            recording_duration = time.time() - session['start_time'] if session['start_time'] else 0
+            logger.info(f"Ended recording for {client_id} (duration: {recording_duration:.1f}s, force: {force})")
+    
+    async def _max_duration_timeout(self, client_id: str):
+        """Handle maximum recording duration timeout"""
+        try:
+            await asyncio.sleep(self.max_recording_duration_seconds)
+            if client_id in self.recording_sessions and self.recording_sessions[client_id]['is_recording']:
+                logger.info(f"Max recording duration reached for {client_id}, ending recording")
+                await self._end_recording(client_id, force=True)
+        except asyncio.CancelledError:
+            pass
+    
+    def _estimate_audio_duration(self, audio_data: bytes) -> float:
+        """Estimate audio duration in milliseconds from WAV data"""
+        try:
+            if len(audio_data) < 44:
+                return 0.0
+            
+            import struct
+            sample_rate = struct.unpack('<I', audio_data[24:28])[0]
+            channels = struct.unpack('<H', audio_data[22:24])[0]
+            audio_size = len(audio_data) - 44
+            bytes_per_sample = 2  # 16-bit audio
+            total_samples = audio_size // (channels * bytes_per_sample)
+            duration_ms = (total_samples / sample_rate) * 1000
+            
+            return duration_ms
+        except Exception as e:
+            logger.debug(f"Failed to estimate audio duration: {e}")
+            return 0.0
+    
     
     async def _process_audio_async(self, client_id: str, audio_data: bytes, profanity_words: list, player_name: str = None, session_id: str = None):
         """Process audio asynchronously without blocking WebSocket"""
@@ -145,7 +300,6 @@ class SimpleWebSocketManager:
                     flagged_words = temp_filter.check_text(transcript)
                 is_profane = len(flagged_words) > 0
 
-                # Use player_name if provided, otherwise fallback to client_id
                 actual_player_name = player_name if player_name else client_id
                 actual_session_id = session_id if session_id else client_id
 
@@ -255,8 +409,9 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
             elif message_type == "audio_chunk":
                 audio_b64 = data.get("audio_data", "")
                 profanity_words_raw = data.get("profanity_words", [])
-                player_name = data.get("player", client_id)  # Use player name from request, fallback to client_id
-                session_id = data.get("session_id", client_id)  # Use session_id from request, fallback to client_id
+                player_name = data.get("player", client_id)
+                session_id = data.get("session_id", client_id)
+                is_final = data.get("is_final", False)
                 
                 profanity_words = []
                 if isinstance(profanity_words_raw, str):
@@ -272,7 +427,11 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                     try:
                         import base64
                         audio_bytes = base64.b64decode(audio_b64)
-                        await ws_manager.process_audio(client_id, audio_bytes, profanity_words, player_name, session_id)
+                        
+                        if is_final:
+                            await ws_manager.process_audio_final(client_id, audio_bytes, profanity_words, player_name, session_id)
+                        else:
+                            await ws_manager.process_audio(client_id, audio_bytes, profanity_words, player_name, session_id)
                     except Exception as e:
                         logger.error(f"Failed to decode audio data: {e}")
                         await ws_manager.send_message(client_id, {
