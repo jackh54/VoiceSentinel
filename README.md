@@ -85,7 +85,7 @@ Configure the backend using `config.json` (see below). For plugin configuration,
 {
   "server": {
     "host": "0.0.0.0",
-    "port": 8000,
+    "port": 28472,
     "workers": 4,
     "cors": {
       "allow_origins": ["*"],

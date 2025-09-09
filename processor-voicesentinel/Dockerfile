@@ -26,8 +26,8 @@ ENV WHISPER_CACHE_DIR=/tmp/whisper_cache
 RUN mkdir -p /tmp/whisper_cache
 
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+    CMD curl -f http://localhost:28472/health || exit 1
 
-EXPOSE 8000
+EXPOSE 28472
 
-CMD ["python3", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"] 
+CMD ["python3", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "28472", "--workers", "1"] 

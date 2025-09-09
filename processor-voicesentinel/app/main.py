@@ -46,7 +46,7 @@ def get_default_config():
     return {
         "server": {
             "host": "0.0.0.0",
-            "port": 8000
+            "port": 28472
         },
         "transcription": {
             "engine": "whisper",
@@ -459,7 +459,7 @@ if __name__ == "__main__":
     uvicorn.run(
         "main:app",
         host=server_config.get("host", "0.0.0.0"),
-        port=server_config.get("port", 8000),
+        port=server_config.get("port", 28472),
         log_level="info",
         access_log=False
     )
