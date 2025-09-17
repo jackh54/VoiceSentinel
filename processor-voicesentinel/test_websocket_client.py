@@ -15,7 +15,7 @@ import argparse
 from pathlib import Path
 
 class VoiceSentinelTestClient:
-    def __init__(self, host="localhost", port=8000):
+    def __init__(self, host="localhost", port=28472):
         self.host = host
         self.port = port
         self.websocket_url = f"ws://{host}:{port}/ws/test_client_{int(time.time())}"
@@ -215,7 +215,7 @@ class VoiceSentinelTestClient:
             print(f"❌ Stats check error: {e}")
             return False
 
-async def run_full_test(host="localhost", port=8000, audio_file=None):
+async def run_full_test(host="localhost", port=28472, audio_file=None):
     """Run a complete test of the WebSocket connection"""
     print("🚀 Starting VoiceSentinel WebSocket Test")
     print("=" * 50)
@@ -278,7 +278,7 @@ async def run_full_test(host="localhost", port=8000, audio_file=None):
     print("\n🎉 Test completed!")
     return True
 
-async def interactive_test(host="localhost", port=8000):
+async def interactive_test(host="localhost", port=28472):
     """Run an interactive test session"""
     print("🎮 Interactive VoiceSentinel WebSocket Test")
     print("=" * 50)
@@ -327,7 +327,7 @@ async def interactive_test(host="localhost", port=8000):
 def main():
     parser = argparse.ArgumentParser(description="Test VoiceSentinel WebSocket connection")
     parser.add_argument("--host", default="localhost", help="Server host (default: localhost)")
-    parser.add_argument("--port", type=int, default=8000, help="Server port (default: 8000)")
+    parser.add_argument("--port", type=int, default=28472, help="Server port (default: 28472)")
     parser.add_argument("--audio", help="Path to audio file to test with")
     parser.add_argument("--interactive", "-i", action="store_true", help="Run in interactive mode")
     
