@@ -352,7 +352,7 @@ config = load_config()
 app = FastAPI(
     title="VoiceSentinel Processor",
     description="Real-time audio processing and transcription service",
-    version="2.0.1",
+    version="2.0.2",
     lifespan=lifespan
 )
 
@@ -371,7 +371,7 @@ async def health_check():
     return {
         "status": "healthy",
         "service": "voicesentinel-processor",
-        "version": "2.0.1"
+        "version": "2.0.2"
     }
 
 @app.get("/stats")
