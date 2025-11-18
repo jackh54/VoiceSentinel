@@ -110,7 +110,7 @@ class WhisperTranscriber(BaseTranscriber):
                         
                         # Check duration - more lenient thresholds for smart audio system
                         duration_ms = (frames / sample_rate) * 1000
-                        min_duration = self.config.get("audio", {}).get("min_audio_length_ms", 100)
+                        min_duration = self.config.get("audio", {}).get("min_audio_length_ms", 50)
                         max_duration = self.config.get("audio", {}).get("max_audio_length_ms", 30000)
                         
                         if duration_ms < min_duration:

@@ -57,11 +57,14 @@
     "retry_delay_seconds": 1
   },
   "audio": {
+    "max_file_size": 5242880,
+    "supported_formats": ["wav", "mp3", "ogg", "flac"],
+    "min_audio_length_ms": 50,
+    "max_audio_length_ms": 30000,
+    "min_talking_time_ms": 100,
     "max_chunk_size": 262144,
     "max_total_size": 5242880,
     "sample_rate": 16000,
-    "channels": 1,
-    "min_length_ms": 300,
-    "max_length_ms": 15000
+    "channels": 1
   }
 } 

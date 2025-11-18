@@ -131,10 +131,17 @@ class SimpleWebSocketManager:
     async def send_message(self, client_id: str, message: dict):
         if client_id in self.active_connections:
             try:
-                await self.active_connections[client_id].send_json(message)
+                websocket = self.active_connections[client_id]
+                if websocket.client_state.name != 'CONNECTED':
+                    logger.warning(f"WebSocket for {client_id} is not connected, removing from active connections")
+                    self.disconnect(client_id)
+                    return
+                await websocket.send_json(message)
             except Exception as e:
                 logger.error(f"Failed to send message to {client_id}: {e}")
                 self.disconnect(client_id)
+        else:
+            logger.debug(f"Client {client_id} not in active connections, skipping message")
     
     async def process_audio(self, client_id: str, audio_data: bytes, profanity_words: list, player_name: str = None, session_id: str = None):
         """Process audio with Voice Activity Detection"""
@@ -185,12 +192,30 @@ class SimpleWebSocketManager:
             if client_id in self.recording_sessions:
                 await self._end_recording(client_id, force=True)
             
+            final_audio = None
             if client_id in self.audio_buffers and self.audio_buffers[client_id]:
-                combined_audio = self.audio_buffers[client_id] + audio_data
+                final_audio = self.audio_buffers[client_id] + audio_data
                 self.audio_buffers[client_id] = b''
-                await self._process_audio_async(client_id, combined_audio, profanity_words, player_name, session_id)
             else:
-                await self._process_audio_async(client_id, audio_data, profanity_words, player_name, session_id)
+                final_audio = audio_data
+            
+            # pre-validate audio before processing
+            if self._should_process_audio(final_audio):
+                await self._process_audio_async(client_id, final_audio, profanity_words, player_name, session_id)
+            else:
+                logger.debug(f"Skipping audio processing for {client_id}: audio too short or invalid")
+                # send empty result for very short audio
+                actual_player_name = player_name if player_name else client_id
+                actual_session_id = session_id if session_id else client_id
+                await self.send_message(client_id, {
+                    "type": "final_transcript",
+                    "transcript": "",
+                    "flagged": False,
+                    "bad_words": [],
+                    "player": actual_player_name,
+                    "session_id": actual_session_id
+                })
+                logger.info(f"Audio processing completed for {actual_player_name}: '' (flagged: False)")
             
         except Exception as e:
             logger.error(f"Final audio processing failed for {client_id}: {e}")
@@ -278,15 +303,43 @@ class SimpleWebSocketManager:
             logger.debug(f"Failed to estimate audio duration: {e}")
             return 0.0
     
+    def _should_process_audio(self, audio_data: bytes) -> bool:
+        """Check if audio should be processed based on basic validation"""
+        try:
+            # Basic size check
+            if len(audio_data) < 44:  # Minimum WAV header size
+                return False
+            
+            # Estimate duration
+            duration_ms = self._estimate_audio_duration(audio_data)
+            min_duration = self.config.get("audio", {}).get("min_audio_length_ms", 50)
+            
+            # Allow processing if duration is at least the minimum
+            return duration_ms >= min_duration
+            
+        except Exception as e:
+            logger.warning(f"Audio validation check failed: {e}")
+            return False
+    
     
     async def _process_audio_async(self, client_id: str, audio_data: bytes, profanity_words: list, player_name: str = None, session_id: str = None):
         """Process audio asynchronously without blocking WebSocket"""
         try:
+            # Check if client is still connected before processing
+            if client_id not in self.active_connections:
+                logger.debug(f"Client {client_id} disconnected before processing, skipping")
+                return
+                
             if self.transcriber:
                 transcript = await asyncio.wait_for(
                     self.transcriber.transcribe(audio_data),
                     timeout=30.0
                 )
+
+                # Check again if client is still connected after transcription
+                if client_id not in self.active_connections:
+                    logger.debug(f"Client {client_id} disconnected during processing, skipping result")
+                    return
 
                 flagged_words = []
                 if transcript:
