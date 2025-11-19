@@ -26,6 +26,13 @@ logging.getLogger("websockets").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
 
+# For testing only
+SAVE_AUDIO_FILES = False
+SAVE_AUDIO_CHUNKS = False
+AUDIO_SAVE_DIR = "saved_audio"
+MIN_AUDIO_SIZE = 1000
+MIN_AUDIO_DURATION_MS = 50
+
 app_state = {}
 
 def load_config():
@@ -52,7 +59,8 @@ def get_default_config():
             "engine": "whisper",
             "model": "tiny.en",
             "language": "en",
-            "timeout_seconds": 30
+            "timeout_seconds": 10,
+            "cpu_threads": 2
         },
         "audio": {
             "max_file_size": 5 * 1024 * 1024,  # 5MB
@@ -74,6 +82,7 @@ class SimpleWebSocketManager:
         self.active_connections = {}
         self.transcriber = None
         self.profanity_filter = None
+        self.config = {}  # Initialize config attribute
         
         # Voice Activity Detection system
         self.audio_buffers = {}
@@ -82,12 +91,13 @@ class SimpleWebSocketManager:
         self.buffer_metadata = {}
         
         # VAD configuration
-        self.min_talking_time_ms = 500
+        self.min_talking_time_ms = 1000  # Increased from 500ms to reduce false positives
         self.max_recording_duration_seconds = 30
         self.end_threshold_packets = 5
     
     async def initialize(self, config):
         try:
+            self.config = config
             transcription_config = config.get("transcription", {})
             self.transcriber = WhisperTranscriber(
                 model_name=transcription_config.get("model", "tiny.en"),
@@ -98,7 +108,7 @@ class SimpleWebSocketManager:
             
             # Load VAD configuration
             voice_detection = config.get("voice_detection", {})
-            self.min_talking_time_ms = voice_detection.get("min_talking_time_ms", 500)
+            self.min_talking_time_ms = voice_detection.get("min_talking_time_ms", 1000)  # Increased default to reduce false positives
             self.max_recording_duration_seconds = voice_detection.get("max_recording_duration_seconds", 30)
             self.end_threshold_packets = voice_detection.get("end_threshold_packets", 5)
             
@@ -242,7 +252,7 @@ class SimpleWebSocketManager:
         """Check if recording should end based on silence or duration"""
         session = self.recording_sessions[client_id]
         current_time = time.time()
-        if session['last_audio_time'] and (current_time - session['last_audio_time']) > 0.5:  # 500ms silence
+        if session['last_audio_time'] and (current_time - session['last_audio_time']) > 1.0:  # 1 second silence (increased from 500ms)
             session['silence_packets'] += 1
             if session['silence_packets'] >= self.end_threshold_packets:
                 await self._end_recording(client_id)
@@ -285,36 +295,58 @@ class SimpleWebSocketManager:
             pass
     
     def _estimate_audio_duration(self, audio_data: bytes) -> float:
-        """Estimate audio duration in milliseconds from WAV data"""
+        """Estimate audio duration in milliseconds from audio data"""
         try:
             if len(audio_data) < 44:
+                logger.debug(f"Audio data too short: {len(audio_data)} bytes")
                 return 0.0
             
-            import struct
-            sample_rate = struct.unpack('<I', audio_data[24:28])[0]
-            channels = struct.unpack('<H', audio_data[22:24])[0]
-            audio_size = len(audio_data) - 44
-            bytes_per_sample = 2  # 16-bit audio
-            total_samples = audio_size // (channels * bytes_per_sample)
-            duration_ms = (total_samples / sample_rate) * 1000
-            
+            if audio_data.startswith(b'RIFF') and b'WAVE' in audio_data[:12]:
+                import struct
+                try:
+                    sample_rate = struct.unpack('<I', audio_data[24:28])[0]
+                    channels = struct.unpack('<H', audio_data[22:24])[0]
+                    bits_per_sample = struct.unpack('<H', audio_data[34:36])[0]
+                    data_start = 44
+                    if audio_data[36:40] != b'data':
+                        pos = 12
+                        while pos < len(audio_data) - 8:
+                            chunk_id = audio_data[pos:pos+4]
+                            chunk_size = struct.unpack('<I', audio_data[pos+4:pos+8])[0]
+                            if chunk_id == b'data':
+                                data_start = pos + 8
+                                break
+                            pos += 8 + chunk_size
+                    
+                    audio_size = len(audio_data) - data_start
+                    bytes_per_sample = bits_per_sample // 8
+                    total_samples = audio_size // (channels * bytes_per_sample)
+                    duration_ms = (total_samples / sample_rate) * 1000
+                    if duration_ms < 50:
+                        logger.debug(f"Short audio: {duration_ms:.1f}ms ({audio_size} bytes)")
+                    return duration_ms
+                    
+                except Exception as e:
+                    logger.debug(f"WAV parsing failed: {e}")
+                    
+            estimated_samples = len(audio_data) // 2
+            duration_ms = (estimated_samples / 16000) * 1000
+            if duration_ms < 100:
+                logger.debug(f"Fallback audio estimation: {duration_ms:.1f}ms")
             return duration_ms
+            
         except Exception as e:
             logger.debug(f"Failed to estimate audio duration: {e}")
-            return 0.0
+            return max(100.0, len(audio_data) / 32.0)
     
     def _should_process_audio(self, audio_data: bytes) -> bool:
         """Check if audio should be processed based on basic validation"""
         try:
-            # Basic size check
-            if len(audio_data) < 44:  # Minimum WAV header size
+            if len(audio_data) < 44:
                 return False
-            
-            # Estimate duration
             duration_ms = self._estimate_audio_duration(audio_data)
             min_duration = self.config.get("audio", {}).get("min_audio_length_ms", 50)
             
-            # Allow processing if duration is at least the minimum
             return duration_ms >= min_duration
             
         except Exception as e:
@@ -480,6 +512,27 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                     try:
                         import base64
                         audio_bytes = base64.b64decode(audio_b64)
+                        
+                        if SAVE_AUDIO_FILES:
+                            should_save = is_final or SAVE_AUDIO_CHUNKS
+                            
+                            if should_save:
+                                if len(audio_bytes) >= MIN_AUDIO_SIZE:
+                                    duration_ms = ws_manager._estimate_audio_duration(audio_bytes)
+                                    if duration_ms >= MIN_AUDIO_DURATION_MS:
+                                        try:
+                                            os.makedirs(AUDIO_SAVE_DIR, exist_ok=True)
+                                            timestamp = int(time.time() * 1000)
+                                            filename = f"{AUDIO_SAVE_DIR}/{player_name}_{timestamp}_{'final' if is_final else 'chunk'}.wav"
+                                            with open(filename, 'wb') as f:
+                                                f.write(audio_bytes)
+                                            logger.info(f"💾 Saved audio file: {filename} ({len(audio_bytes)} bytes, {duration_ms:.0f}ms)")
+                                        except Exception as e:
+                                            logger.warning(f"Failed to save audio file: {e}")
+                                    else:
+                                        logger.debug(f"Skipping audio file save: duration too short ({duration_ms:.0f}ms < {MIN_AUDIO_DURATION_MS}ms)")
+                                else:
+                                    logger.debug(f"Skipping audio file save: size too small ({len(audio_bytes)} bytes < {MIN_AUDIO_SIZE} bytes)")
                         
                         if is_final:
                             await ws_manager.process_audio_final(client_id, audio_bytes, profanity_words, player_name, session_id)

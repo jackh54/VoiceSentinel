@@ -40,7 +40,7 @@ class WhisperTranscriber(BaseTranscriber):
         
         # Whisper-specific configuration
         self.whisper_config = self.config.get("transcription", {})
-        self.timeout_seconds = self.whisper_config.get("timeout_seconds", 150)
+        self.timeout_seconds = self.whisper_config.get("timeout_seconds", 30)
         
         logger.info(f"Initialized OpenAI Whisper transcriber with model: {model_name}")
     
@@ -51,9 +51,9 @@ class WhisperTranscriber(BaseTranscriber):
             import torch
             
             # Set CPU processing for optimal performance
-            threads = self.config.get("transcription", {}).get("cpu_threads", 0)
-            if threads > 0:
-                torch.set_num_threads(threads)
+            threads = self.config.get("transcription", {}).get("cpu_threads", 2)
+            torch.set_num_threads(threads)
+            torch.set_num_interop_threads(1)  # Reduce thread contention
             
             # Force CPU processing (no CUDA)
             device = "cpu"
@@ -75,11 +75,14 @@ class WhisperTranscriber(BaseTranscriber):
     def _validate_audio(self, audio_data: bytes) -> Tuple[bool, str]:
         """Validate audio data before processing"""
         try:
+            # Only log validation details if there are issues
+            
             if len(audio_data) < 44:  # Minimum WAV header size
                 return False, "Audio data too short (less than WAV header size)"
             
             # Check if it's a valid WAV file
             if not audio_data.startswith(b'RIFF') or b'WAVE' not in audio_data[:12]:
+                logger.debug(f"Not a WAV file - first 12 bytes: {audio_data[:12]}")
                 return False, "Invalid WAV file format"
             
             # Parse WAV header to get basic info
@@ -139,7 +142,9 @@ class WhisperTranscriber(BaseTranscriber):
                             if avg_energy < 10 and non_zero_ratio < 0.1:
                                 return False, f"Audio quality too low: avg_energy={avg_energy:.1f}, non_zero_ratio={non_zero_ratio:.3f}"
                         
-                        logger.debug(f"Audio validation passed: {frames} frames, {sample_rate}Hz, {channels}ch, {sample_width}B, {duration_ms:.1f}ms")
+                        # Only log successful validation for longer audio
+                        if duration_ms > 500:
+                            logger.info(f"✅ Valid audio: {duration_ms:.0f}ms")
                         return True, f"Valid audio: {duration_ms:.1f}ms"
                         
                 except wave.Error as e:
@@ -162,45 +167,35 @@ class WhisperTranscriber(BaseTranscriber):
                 logger.error("Whisper model not loaded")
                 return ""
             
-            logger.info(f"Starting Whisper transcription of {len(audio_data)} bytes")
-            
-            # Validate audio before processing
-            is_valid, validation_message = self._validate_audio(audio_data)
-            if not is_valid:
-                logger.warning(f"Audio validation failed: {validation_message}")
+            if len(audio_data) < 5000:
                 return ""
             
-            logger.debug(f"Audio validation: {validation_message}")
+            if len(audio_data) > 50000:
+                logger.info(f"Starting Whisper transcription of {len(audio_data)} bytes")
+                logger.info(f"🎵 Processing large audio: {len(audio_data)} bytes")
             
-            # Create temporary file for audio data
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_audio:
                 temp_audio.write(audio_data)
                 temp_audio_path = temp_audio.name
             
             try:
-                logger.info(f"Created temporary audio file: {temp_audio_path}")
-                
-                # Run transcription in thread pool to avoid blocking
                 loop = asyncio.get_event_loop()
                 
                 def whisper_transcribe():
                     try:
-                        logger.info("Starting Whisper model transcription...")
-                        
-                        # Get Whisper configuration
                         whisper_opts = {
                             "language": self.language if self.language != "auto" else None,
-                            "fp16": self.whisper_config.get("options", {}).get("fp16", False),
+                            "fp16": False,
                             "verbose": False,
-                            "temperature": self.whisper_config.get("options", {}).get("temperature", 0.0),
-                            "condition_on_previous_text": self.whisper_config.get("options", {}).get("condition_on_previous_text", False),
-                            "no_speech_threshold": self.whisper_config.get("options", {}).get("no_speech_threshold", 0.7),
-                            "beam_size": self.whisper_config.get("options", {}).get("beam_size", 1),
-                            "best_of": self.whisper_config.get("options", {}).get("best_of", 1),
-                            "suppress_blank": self.whisper_config.get("options", {}).get("suppress_blank", True)
+                            "temperature": 0.0,
+                            "condition_on_previous_text": False,
+                            "no_speech_threshold": 0.6,
+                            "beam_size": 5,
+                            "best_of": 5,
+                            "suppress_blank": True,
+                            "word_timestamps": False
                         }
                         
-                        # Add optional parameters if they exist
                         if "suppress_tokens" in self.whisper_config:
                             whisper_opts["suppress_tokens"] = self.whisper_config["suppress_tokens"]
                         
@@ -213,15 +208,11 @@ class WhisperTranscriber(BaseTranscriber):
                         if "append_punctuations" in self.whisper_config:
                             whisper_opts["append_punctuations"] = self.whisper_config["append_punctuations"]
                         
-                        logger.debug(f"Whisper options: {whisper_opts}")
-                        
                         result = self.model.transcribe(temp_audio_path, **whisper_opts)
-                        logger.info("Whisper model transcription completed")
                         return result
                         
                     except Exception as e:
                         logger.error(f"Whisper transcription error in thread: {e}")
-                        # Check for specific error types
                         error_msg = str(e).lower()
                         if "reshape tensor" in error_msg or "tensor of 0 elements" in error_msg:
                             logger.error("Whisper tensor reshape error - likely empty/corrupted audio")
@@ -231,14 +222,14 @@ class WhisperTranscriber(BaseTranscriber):
                             logger.error("Whisper internal timeout")
                         raise
                 
-                # Add timeout protection for the transcription itself
                 result = await asyncio.wait_for(
                     loop.run_in_executor(None, whisper_transcribe),
                     timeout=self.timeout_seconds
                 )
                 
                 transcript = result.get("text", "").strip()
-                logger.info(f"Whisper transcription result: '{transcript}' (length: {len(transcript)})")
+                if transcript and len(transcript) > 3:
+                    logger.info(f"🗣️  Transcribed: '{transcript}'")
                 return transcript
                 
             except asyncio.TimeoutError:
@@ -248,21 +239,18 @@ class WhisperTranscriber(BaseTranscriber):
                 logger.error(f"Whisper transcription failed: {e}")
                 return ""
             finally:
-                # Clean up temporary file - CRITICAL for privacy
                 if os.path.exists(temp_audio_path):
                     try:
                         os.unlink(temp_audio_path)
-                        logger.debug(f"Cleaned up temporary file: {temp_audio_path}")
                     except Exception as e:
                         logger.error(f"SECURITY: Failed to cleanup temp file {temp_audio_path}: {e}")
-                        # Try alternative cleanup methods
                         try:
                             os.chmod(temp_audio_path, 0o666)
                             os.unlink(temp_audio_path)
                             logger.info(f"Alternative cleanup successful: {temp_audio_path}")
                         except Exception as e2:
                             logger.critical(f"SECURITY: Unable to delete audio file {temp_audio_path}: {e2}")
-                    
+                            
         except Exception as e:
             logger.error(f"Whisper transcription failed: {e}")
             return ""

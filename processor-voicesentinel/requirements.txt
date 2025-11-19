@@ -23,3 +23,6 @@ psutil==7.0.0
 # Development and testing
 pytest==7.4.4
 httpx==0.28.1
+
+# Logging
+colorama==0.4.6
