@@ -1,443 +1,344 @@
 #!/usr/bin/env python3
 
 import os
-import sys
 import json
 import logging
 import asyncio
 import time
+from datetime import datetime
+from pathlib import Path
 from contextlib import asynccontextmanager
-from typing import Dict, Any
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from app.transcriber import WhisperTranscriber
-from app.profanity import create_default_filter, ProfanityFilter
+from app.transcriber import create_transcriber
+from app.profanity import ProfanityFilter
+from app.config_validator import validate_config, ConfigValidationError
+from app.llm_profanity import LLMProfanityDetector
+from app.console_status import ConsoleStatus
+
+import sys
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler()]
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)]
 )
 
-logging.getLogger("uvicorn").setLevel(logging.WARNING)
-logging.getLogger("websockets").setLevel(logging.WARNING)
+# Enable progress bars for model downloads
+os.environ['HF_HUB_DISABLE_PROGRESS_BARS'] = '0'
+logging.getLogger("huggingface_hub").setLevel(logging.INFO)
+logging.getLogger("huggingface_hub.file_download").setLevel(logging.INFO)
 
 logger = logging.getLogger(__name__)
 
-# For testing only
-SAVE_AUDIO_FILES = False
-SAVE_AUDIO_CHUNKS = False
-AUDIO_SAVE_DIR = "saved_audio"
-MIN_AUDIO_SIZE = 1000
-MIN_AUDIO_DURATION_MS = 50
-
-app_state = {}
+VERSION = "3.0.0"
 
 def load_config():
-    config_path = os.environ.get('CONFIG_PATH', '/app/config.json')
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(script_dir)
+    default_local_path = os.path.join(project_root, 'config.json')
+    config_path = os.environ.get('CONFIG_PATH', default_local_path)
     
     try:
         with open(config_path, 'r') as f:
             config = json.load(f)
-        return config
+        config_clean = {k: v for k, v in config.items() if not k.startswith('_')}
+        validate_config(config_clean)
+        return config_clean
     except FileNotFoundError:
-        logger.warning(f"Config file not found at {config_path}, using defaults")
-        return get_default_config()
+        default_config = get_default_config()
+        validate_config(default_config)
+        return default_config
     except json.JSONDecodeError as e:
         logger.error(f"Invalid JSON in config file: {e}")
-        return get_default_config()
+        raise
+    except ConfigValidationError as e:
+        logger.error(f"Configuration validation failed: {e}")
+        raise
 
 def get_default_config():
     return {
-        "server": {
-            "host": "0.0.0.0",
-            "port": 28472
-        },
+        "server": {"host": "0.0.0.0", "port": 28472, "server_key": ""},
         "transcription": {
-            "engine": "whisper",
-            "model": "tiny.en",
+            "model": "Systran/faster-whisper-base",
             "language": "en",
-            "timeout_seconds": 10,
-            "cpu_threads": 2
+            "device": "cpu",
+            "compute_type": "int8",
+            "timeout_seconds": 30,
+            "cpu_threads": 2,
+            "huggingface_token": ""
         },
         "audio": {
-            "max_file_size": 5 * 1024 * 1024,  # 5MB
-            "supported_formats": ["wav", "mp3", "ogg", "flac"]
+            "min_audio_length_ms": 50,
+            "max_audio_length_ms": 30000,
+            "sample_rate": 16000,
+            "channels": 1
+        },
+        "recordings": {
+            "save_mode": "none",
+            "save_path": "recordings/",
+            "retention_days": 7
         },
         "cors": {
             "allow_origins": ["*"],
             "allow_credentials": True,
             "allow_methods": ["*"],
             "allow_headers": ["*"]
-        },
-        "security": {
-            "api_keys": []
         }
     }
 
-class SimpleWebSocketManager:  
+class WebSocketManager:
     def __init__(self):
         self.active_connections = {}
         self.transcriber = None
-        self.profanity_filter = None
-        self.config = {}  # Initialize config attribute
-        
-        # Voice Activity Detection system
+        self.llm_detector = None
+        self.config = {}
         self.audio_buffers = {}
-        self.recording_sessions = {}
-        self.recording_timers = {}
         self.buffer_metadata = {}
-        
-        # VAD configuration
-        self.min_talking_time_ms = 1000  # Increased from 500ms to reduce false positives
-        self.max_recording_duration_seconds = 30
-        self.end_threshold_packets = 5
+        self.console_status = None
     
     async def initialize(self, config):
-        try:
-            self.config = config
-            transcription_config = config.get("transcription", {})
-            self.transcriber = WhisperTranscriber(
-                model_name=transcription_config.get("model", "tiny.en"),
-                language=transcription_config.get("language", "en"),
-                config=config
-            )
-            self.profanity_filter = create_default_filter()
-            
-            # Load VAD configuration
-            voice_detection = config.get("voice_detection", {})
-            self.min_talking_time_ms = voice_detection.get("min_talking_time_ms", 1000)  # Increased default to reduce false positives
-            self.max_recording_duration_seconds = voice_detection.get("max_recording_duration_seconds", 30)
-            self.end_threshold_packets = voice_detection.get("end_threshold_packets", 5)
-            
-            logger.info(f"WebSocket manager initialized with VAD: min_talking={self.min_talking_time_ms}ms, max_duration={self.max_recording_duration_seconds}s")
-        except Exception as e:
-            logger.error(f"Failed to initialize WebSocket manager: {e}")
-            raise
+        self.config = config
+        self.console_status = ConsoleStatus(config)
+        transcription_config = config.get("transcription", {})
+        
+        self.transcriber = create_transcriber(
+            "faster-whisper",
+            model_name=transcription_config.get("model", "Systran/faster-whisper-large-v3"),
+            language=transcription_config.get("language", "auto"),
+            config=config
+        )
+        
+        self.llm_detector = LLMProfanityDetector(config)
+        
+        recordings_config = config.get("recordings", {})
+        save_mode = recordings_config.get("save_mode", "none")
+        if save_mode != "none":
+            save_path = Path(recordings_config.get("save_path", "recordings/"))
+            save_path.mkdir(parents=True, exist_ok=True)
+            self._cleanup_old_recordings(save_path, recordings_config.get("retention_days", 7))
     
     async def connect(self, websocket: WebSocket, client_id: str):
         await websocket.accept()
         self.active_connections[client_id] = websocket
-        logger.info(f"Client {client_id} connected")
     
     def disconnect(self, client_id: str):
-        if client_id in self.active_connections:
-            del self.active_connections[client_id]
-        
-        if client_id in self.audio_buffers:
-            del self.audio_buffers[client_id]
-        if client_id in self.recording_sessions:
-            del self.recording_sessions[client_id]
-        if client_id in self.recording_timers:
-            self.recording_timers[client_id].cancel()
-            del self.recording_timers[client_id]
-        if client_id in self.buffer_metadata:
-            del self.buffer_metadata[client_id]
-        
-        logger.info(f"Client {client_id} disconnected")
+        self.active_connections.pop(client_id, None)
+        self.audio_buffers.pop(client_id, None)
+        self.buffer_metadata.pop(client_id, None)
     
     async def send_message(self, client_id: str, message: dict):
         if client_id in self.active_connections:
             try:
-                websocket = self.active_connections[client_id]
-                if websocket.client_state.name != 'CONNECTED':
-                    logger.warning(f"WebSocket for {client_id} is not connected, removing from active connections")
-                    self.disconnect(client_id)
-                    return
-                await websocket.send_json(message)
+                await self.active_connections[client_id].send_json(message)
             except Exception as e:
-                logger.error(f"Failed to send message to {client_id}: {e}")
+                logger.error(f"Send failed: {e}")
                 self.disconnect(client_id)
-        else:
-            logger.debug(f"Client {client_id} not in active connections, skipping message")
     
-    async def process_audio(self, client_id: str, audio_data: bytes, profanity_words: list, player_name: str = None, session_id: str = None):
-        """Process audio with Voice Activity Detection"""
+    async def process_audio(self, client_id: str, audio_data: bytes, profanity_words: list, player_name: str = None, session_id: str = None, language_word_lists: dict = None):
         try:
             self.buffer_metadata[client_id] = {
                 'player_name': player_name,
                 'session_id': session_id,
-                'profanity_words': profanity_words
+                'profanity_words': profanity_words,
+                'language_word_lists': language_word_lists or {}
             }
             
-            if client_id not in self.recording_sessions:
-                self.recording_sessions[client_id] = {
-                    'is_recording': False,
-                    'start_time': None,
-                    'last_audio_time': None,
-                    'silence_packets': 0,
-                    'total_duration': 0
-                }
+            if client_id not in self.audio_buffers:
                 self.audio_buffers[client_id] = b''
             
-            session = self.recording_sessions[client_id]
-            current_time = time.time()
             self.audio_buffers[client_id] += audio_data
-            session['last_audio_time'] = current_time
-            audio_duration = self._estimate_audio_duration(audio_data)
-            session['total_duration'] += audio_duration
-            
-            if not session['is_recording']:
-                if session['total_duration'] >= self.min_talking_time_ms:
-                    logger.info(f"Voice detected for {client_id}, starting recording (duration: {session['total_duration']:.1f}ms)")
-                    await self._start_recording(client_id)
-                else:
-                    logger.debug(f"Building audio for {client_id}: {session['total_duration']:.1f}ms/{self.min_talking_time_ms}ms")
-            else:
-                await self._check_recording_end(client_id)
-            
         except Exception as e:
-            logger.error(f"Audio processing failed for {client_id}: {e}")
-            await self.send_message(client_id, {
-                "type": "error",
-                "message": str(e),
-                "status": "error"
-            })
+            logger.error(f"Audio buffering failed: {e}")
     
-    async def process_audio_final(self, client_id: str, audio_data: bytes, profanity_words: list, player_name: str = None, session_id: str = None):
-        """Process final audio chunk - end recording and process immediately"""
+    async def process_audio_final(self, client_id: str, audio_data: bytes, profanity_words: list, player_name: str = None, session_id: str = None, language_word_lists: dict = None):
         try:
-            if client_id in self.recording_sessions:
-                await self._end_recording(client_id, force=True)
+            final_audio = self.audio_buffers.get(client_id, b'') + audio_data
+            self.audio_buffers[client_id] = b''
             
-            final_audio = None
-            if client_id in self.audio_buffers and self.audio_buffers[client_id]:
-                final_audio = self.audio_buffers[client_id] + audio_data
-                self.audio_buffers[client_id] = b''
-            else:
-                final_audio = audio_data
-            
-            # pre-validate audio before processing
             if self._should_process_audio(final_audio):
-                await self._process_audio_async(client_id, final_audio, profanity_words, player_name, session_id)
+                await self._process_audio_async(client_id, final_audio, profanity_words, player_name, session_id, language_word_lists)
             else:
-                logger.debug(f"Skipping audio processing for {client_id}: audio too short or invalid")
-                # send empty result for very short audio
-                actual_player_name = player_name if player_name else client_id
-                actual_session_id = session_id if session_id else client_id
                 await self.send_message(client_id, {
                     "type": "final_transcript",
                     "transcript": "",
                     "flagged": False,
                     "bad_words": [],
-                    "player": actual_player_name,
-                    "session_id": actual_session_id
+                    "player": player_name or client_id,
+                    "session_id": session_id or client_id,
+                    "processing_time_ms": 0,
+                    "detected_language": "unknown"
                 })
-                logger.info(f"Audio processing completed for {actual_player_name}: '' (flagged: False)")
-            
         except Exception as e:
-            logger.error(f"Final audio processing failed for {client_id}: {e}")
-            await self.send_message(client_id, {
-                "type": "error",
-                "message": str(e),
-                "status": "error"
-            })
+            logger.error(f"Audio processing failed: {e}")
     
-    async def _start_recording(self, client_id: str):
-        """Start a new recording session"""
-        session = self.recording_sessions[client_id]
-        session['is_recording'] = True
-        session['start_time'] = time.time()
-        session['silence_packets'] = 0
-        import asyncio
-        self.recording_timers[client_id] = asyncio.create_task(
-            self._max_duration_timeout(client_id)
-        )
-        
-        logger.info(f"Started recording for {client_id}")
-    
-    async def _check_recording_end(self, client_id: str):
-        """Check if recording should end based on silence or duration"""
-        session = self.recording_sessions[client_id]
-        current_time = time.time()
-        if session['last_audio_time'] and (current_time - session['last_audio_time']) > 1.0:  # 1 second silence (increased from 500ms)
-            session['silence_packets'] += 1
-            if session['silence_packets'] >= self.end_threshold_packets:
-                await self._end_recording(client_id)
-        else:
-            session['silence_packets'] = 0
-    
-    async def _end_recording(self, client_id: str, force: bool = False):
-        """End current recording and process the audio"""
-        if client_id not in self.recording_sessions or not self.recording_sessions[client_id]['is_recording']:
-            return
-        
-        session = self.recording_sessions[client_id]
-        session['is_recording'] = False
-        
-        if client_id in self.recording_timers:
-            self.recording_timers[client_id].cancel()
-            del self.recording_timers[client_id]
-        
-        if client_id in self.audio_buffers and self.audio_buffers[client_id]:
-            audio_data = self.audio_buffers[client_id]
-            self.audio_buffers[client_id] = b''
-            metadata = self.buffer_metadata.get(client_id, {})
-            player_name = metadata.get('player_name')
-            session_id = metadata.get('session_id')
-            profanity_words = metadata.get('profanity_words', [])
-            
-            await self._process_audio_async(client_id, audio_data, profanity_words, player_name, session_id)
-            
-            recording_duration = time.time() - session['start_time'] if session['start_time'] else 0
-            logger.info(f"Ended recording for {client_id} (duration: {recording_duration:.1f}s, force: {force})")
-    
-    async def _max_duration_timeout(self, client_id: str):
-        """Handle maximum recording duration timeout"""
+    def _cleanup_old_recordings(self, save_path: Path, retention_days: int):
         try:
-            await asyncio.sleep(self.max_recording_duration_seconds)
-            if client_id in self.recording_sessions and self.recording_sessions[client_id]['is_recording']:
-                logger.info(f"Max recording duration reached for {client_id}, ending recording")
-                await self._end_recording(client_id, force=True)
-        except asyncio.CancelledError:
-            pass
-    
-    def _estimate_audio_duration(self, audio_data: bytes) -> float:
-        """Estimate audio duration in milliseconds from audio data"""
-        try:
-            if len(audio_data) < 44:
-                logger.debug(f"Audio data too short: {len(audio_data)} bytes")
-                return 0.0
-            
-            if audio_data.startswith(b'RIFF') and b'WAVE' in audio_data[:12]:
-                import struct
-                try:
-                    sample_rate = struct.unpack('<I', audio_data[24:28])[0]
-                    channels = struct.unpack('<H', audio_data[22:24])[0]
-                    bits_per_sample = struct.unpack('<H', audio_data[34:36])[0]
-                    data_start = 44
-                    if audio_data[36:40] != b'data':
-                        pos = 12
-                        while pos < len(audio_data) - 8:
-                            chunk_id = audio_data[pos:pos+4]
-                            chunk_size = struct.unpack('<I', audio_data[pos+4:pos+8])[0]
-                            if chunk_id == b'data':
-                                data_start = pos + 8
-                                break
-                            pos += 8 + chunk_size
-                    
-                    audio_size = len(audio_data) - data_start
-                    bytes_per_sample = bits_per_sample // 8
-                    total_samples = audio_size // (channels * bytes_per_sample)
-                    duration_ms = (total_samples / sample_rate) * 1000
-                    if duration_ms < 50:
-                        logger.debug(f"Short audio: {duration_ms:.1f}ms ({audio_size} bytes)")
-                    return duration_ms
-                    
-                except Exception as e:
-                    logger.debug(f"WAV parsing failed: {e}")
-                    
-            estimated_samples = len(audio_data) // 2
-            duration_ms = (estimated_samples / 16000) * 1000
-            if duration_ms < 100:
-                logger.debug(f"Fallback audio estimation: {duration_ms:.1f}ms")
-            return duration_ms
-            
+            cutoff = time.time() - (retention_days * 86400)
+            for file in save_path.glob("*.wav"):
+                if file.stat().st_mtime < cutoff:
+                    file.unlink()
         except Exception as e:
-            logger.debug(f"Failed to estimate audio duration: {e}")
-            return max(100.0, len(audio_data) / 32.0)
+            logger.warning(f"Failed to cleanup old recordings: {e}")
+    
+    async def _save_recording(self, audio_data: bytes, player_name: str, flagged: bool, transcript: str):
+        try:
+            recordings_config = self.config.get("recordings", {})
+            save_mode = recordings_config.get("save_mode", "none")
+            
+            if save_mode == "none" or (save_mode == "flagged" and not flagged):
+                return
+            
+            save_path = Path(recordings_config.get("save_path", "recordings/"))
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"{timestamp}_{player_name}_{'flagged' if flagged else 'clean'}.wav"
+            
+            audio_file = save_path / filename
+            audio_file.write_bytes(audio_data)
+            
+            # Save metadata
+            metadata_file = save_path / f"{filename}.json"
+            metadata = {
+                "timestamp": datetime.now().isoformat(),
+                "player": player_name,
+                "flagged": flagged,
+                "transcript": transcript
+            }
+            metadata_file.write_text(json.dumps(metadata, indent=2))
+        except Exception as e:
+            logger.error(f"Failed to save recording: {e}")
     
     def _should_process_audio(self, audio_data: bytes) -> bool:
-        """Check if audio should be processed based on basic validation"""
         try:
-            if len(audio_data) < 44:
+            if len(audio_data) < 1000:
                 return False
-            duration_ms = self._estimate_audio_duration(audio_data)
-            min_duration = self.config.get("audio", {}).get("min_audio_length_ms", 50)
-            
-            return duration_ms >= min_duration
-            
-        except Exception as e:
-            logger.warning(f"Audio validation check failed: {e}")
+            min_duration = self.config.get("audio", {}).get("min_audio_length_ms", 500)
+            estimated_duration_ms = (len(audio_data) - 44) / 32
+            return estimated_duration_ms >= min_duration
+        except:
             return False
     
-    
-    async def _process_audio_async(self, client_id: str, audio_data: bytes, profanity_words: list, player_name: str = None, session_id: str = None):
-        """Process audio asynchronously without blocking WebSocket"""
+    async def _process_audio_async(self, client_id: str, audio_data: bytes, profanity_words: list, player_name: str = None, session_id: str = None, language_word_lists: dict = None):
+        processing_start_time = time.time()
+        self.console_status.increment_processing()
         try:
-            # Check if client is still connected before processing
             if client_id not in self.active_connections:
-                logger.debug(f"Client {client_id} disconnected before processing, skipping")
                 return
-                
-            if self.transcriber:
-                transcript = await asyncio.wait_for(
-                    self.transcriber.transcribe(audio_data),
-                    timeout=30.0
-                )
-
-                # Check again if client is still connected after transcription
-                if client_id not in self.active_connections:
-                    logger.debug(f"Client {client_id} disconnected during processing, skipping result")
-                    return
-
-                flagged_words = []
-                if transcript:
-                    combined_words = set(profanity_words or [])
-                    if self.profanity_filter and hasattr(self.profanity_filter, 'words'):
-                        try:
-                            combined_words |= set(self.profanity_filter.words)
-                        except Exception:
-                            pass
-                    temp_filter = ProfanityFilter(words=list(combined_words), case_sensitive=False, partial_match=True)
-                    flagged_words = temp_filter.check_text(transcript)
-                is_profane = len(flagged_words) > 0
-
-                actual_player_name = player_name if player_name else client_id
-                actual_session_id = session_id if session_id else client_id
-
-                await self.send_message(client_id, {
-                    "type": "final_transcript",
-                    "transcript": transcript or "",
-                    "flagged": is_profane,
-                    "bad_words": flagged_words,
-                    "player": actual_player_name,
-                    "session_id": actual_session_id
-                })
-                
-                logger.info(f"Audio processing completed for {actual_player_name}: '{transcript}' (flagged: {is_profane})")
-                
+            
+            actual_player_name = player_name or client_id
+            
+            transcript, detected_language = await asyncio.wait_for(
+                self.transcriber.transcribe(audio_data),
+                timeout=30.0
+            )
+            
+            if client_id not in self.active_connections:
+                return
+            
+            processing_time_ms = int((time.time() - processing_start_time) * 1000)
+            
+            language_profanity = []
+            language_mute = []
+            if language_word_lists and detected_language in language_word_lists:
+                language_profanity = language_word_lists.get(detected_language, {}).get("PROFANITY", [])
+                language_mute = language_word_lists.get(detected_language, {}).get("MUTE", [])
             else:
-                raise Exception("Transcriber not initialized")
-                
+                language_profanity = profanity_words
+            
+            profanity_flagged_words = []
+            if transcript and language_profanity:
+                temp_filter = ProfanityFilter(words=language_profanity, case_sensitive=False, partial_match=True)
+                profanity_flagged_words = temp_filter.check_text(transcript)
+            
+            mute_flagged_words = []
+            if transcript and language_mute:
+                temp_filter = ProfanityFilter(words=language_mute, case_sensitive=False, partial_match=True)
+                mute_flagged_words = temp_filter.check_text(transcript)
+            
+            is_profane = len(profanity_flagged_words) > 0
+            should_mute = len(mute_flagged_words) > 0
+            all_flagged_words = profanity_flagged_words + mute_flagged_words
+            
+            llm_flagged = False
+            llm_confidence = 0.0
+            llm_reason = ""
+            
+            if not is_profane and not should_mute and self.llm_detector and self.llm_detector.enabled and transcript:
+                try:
+                    logger.info(f"[{actual_player_name}] LLM check: Checking transcript (no word list match)")
+                    llm_flagged, llm_confidence, llm_reason = await self.llm_detector.check_profanity(transcript, detected_language)
+                    logger.info(f"[{actual_player_name}] LLM result: flagged={llm_flagged}, confidence={llm_confidence:.2f}, reason={llm_reason}")
+                    if llm_flagged:
+                        is_profane = True
+                except Exception as e:
+                    logger.error(f"LLM check error: {e}")
+            
+            if is_profane or should_mute:
+                self.console_status.increment_flagged(actual_player_name)
+                if should_mute:
+                    self.console_status.increment_muted(actual_player_name)
+            
+            self.console_status.add_transcript(actual_player_name, transcript or "", detected_language, is_profane or should_mute, should_mute)
+            
+            actual_session_id = session_id or client_id
+            
+            response_data = {
+                "type": "final_transcript",
+                "transcript": transcript or "",
+                "flagged": is_profane or should_mute,
+                "should_mute": should_mute,
+                "bad_words": all_flagged_words,
+                "profanity_words": profanity_flagged_words,
+                "mute_words": mute_flagged_words,
+                "player": actual_player_name,
+                "session_id": actual_session_id,
+                "processing_time_ms": processing_time_ms,
+                "detected_language": detected_language
+            }
+            
+            if llm_flagged:
+                response_data["llm_flagged"] = True
+                response_data["llm_confidence"] = llm_confidence
+                response_data["llm_reason"] = llm_reason
+            
+            await self.send_message(client_id, response_data)
+            self.console_status.increment_processed()
+            await self._save_recording(audio_data, actual_player_name, is_profane, transcript or "")
+            
         except asyncio.TimeoutError:
-            logger.error(f"Audio processing timed out for {client_id}")
-            await self.send_message(client_id, {
-                "type": "error",
-                "message": "Audio processing timed out",
-                "status": "error"
-            })
+            logger.error(f"Processing timeout after 30 seconds")
         except Exception as e:
-            logger.error(f"Audio processing failed for {client_id}: {e}")
-            await self.send_message(client_id, {
-                "type": "error",
-                "message": str(e),
-                "status": "error"
-            })
+            logger.error(f"Processing failed: {e}")
+        finally:
+            self.console_status.decrement_processing()
 
-ws_manager = SimpleWebSocketManager()
+ws_manager = WebSocketManager()
+
+async def console_update_task():
+    while True:
+        try:
+            await asyncio.sleep(5)
+            if ws_manager.console_status and ws_manager.console_status.has_changed():
+                ws_manager.console_status.print_status()
+        except Exception as e:
+            logger.error(f"Console update error: {e}")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    try:
-        app_state['config'] = config
-        await ws_manager.initialize(config)
-        logger.info("Application started successfully")
-        yield
-    except Exception as e:
-        logger.error(f"Failed to start application: {e}")
-        raise
-    finally:
-        logger.info("Application shutting down")
+    await ws_manager.initialize(config)
+    if ws_manager.console_status:
+        ws_manager.console_status.print_status(force=True)
+    asyncio.create_task(console_update_task())
+    yield
 
 config = load_config()
 
 app = FastAPI(
     title="VoiceSentinel Processor",
     description="Real-time audio processing and transcription service",
-    version="2.0.3",
+    version=VERSION,
     lifespan=lifespan
 )
 
@@ -453,23 +354,19 @@ app.add_middleware(
 
 @app.get("/health")
 async def health_check():
-    return {
-        "status": "healthy",
-        "service": "voicesentinel-processor",
-        "version": "2.0.3"
-    }
+    return {"status": "healthy", "version": VERSION}
 
 @app.get("/stats")
 async def get_stats():
     return {
         "active_connections": len(ws_manager.active_connections),
-        "transcriber_ready": ws_manager.transcriber is not None,
-        "profanity_filter_ready": ws_manager.profanity_filter is not None
+        "transcriber_ready": ws_manager.transcriber is not None
     }
 
 @app.websocket("/ws/{client_id}")
 async def websocket_endpoint(websocket: WebSocket, client_id: str):
     await ws_manager.connect(websocket, client_id)
+    authenticated = False
     
     try:
         while True:
@@ -478,79 +375,50 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
             
             if message_type == "auth":
                 server_key = data.get("server_key", "")
-                if server_key and len(server_key) >= 16:
-                    await ws_manager.send_message(client_id, {
-                        "type": "auth_success",
-                        "message": "Authentication successful"
-                    })
-                    logger.info(f"Client {client_id} authenticated successfully")
+                config_key = config.get("server", {}).get("server_key", "")
+                
+                # Allow auth if no key configured or key matches
+                if not config_key or server_key == config_key:
+                    authenticated = True
+                    await ws_manager.send_message(client_id, {"type": "auth_success"})
                 else:
-                    await ws_manager.send_message(client_id, {
-                        "type": "auth_failed",
-                        "reason": "Invalid server key"
-                    })
-                    logger.warning(f"Client {client_id} authentication failed")
+                    await ws_manager.send_message(client_id, {"type": "auth_failed", "reason": "Invalid server key"})
+                    await websocket.close()
+                    return
                     
-            elif message_type == "audio_chunk":
+            elif message_type == "audio_chunk" and authenticated:
+                import base64
                 audio_b64 = data.get("audio_data", "")
-                profanity_words_raw = data.get("profanity_words", [])
+                profanity_words = data.get("profanity_words", [])
                 player_name = data.get("player", client_id)
                 session_id = data.get("session_id", client_id)
                 is_final = data.get("is_final", False)
+                language_word_lists = data.get("language_word_lists", {})
                 
-                profanity_words = []
-                if isinstance(profanity_words_raw, str):
+                if isinstance(profanity_words, str):
                     try:
-                        import json
-                        profanity_words = json.loads(profanity_words_raw)
+                        profanity_words = json.loads(profanity_words)
                     except:
                         profanity_words = []
-                elif isinstance(profanity_words_raw, list):
-                    profanity_words = profanity_words_raw
+                
+                if isinstance(language_word_lists, str):
+                    try:
+                        language_word_lists = json.loads(language_word_lists)
+                    except:
+                        language_word_lists = {}
                 
                 if audio_b64:
                     try:
-                        import base64
                         audio_bytes = base64.b64decode(audio_b64)
-                        
-                        if SAVE_AUDIO_FILES:
-                            should_save = is_final or SAVE_AUDIO_CHUNKS
-                            
-                            if should_save:
-                                if len(audio_bytes) >= MIN_AUDIO_SIZE:
-                                    duration_ms = ws_manager._estimate_audio_duration(audio_bytes)
-                                    if duration_ms >= MIN_AUDIO_DURATION_MS:
-                                        try:
-                                            os.makedirs(AUDIO_SAVE_DIR, exist_ok=True)
-                                            timestamp = int(time.time() * 1000)
-                                            filename = f"{AUDIO_SAVE_DIR}/{player_name}_{timestamp}_{'final' if is_final else 'chunk'}.wav"
-                                            with open(filename, 'wb') as f:
-                                                f.write(audio_bytes)
-                                            logger.info(f"💾 Saved audio file: {filename} ({len(audio_bytes)} bytes, {duration_ms:.0f}ms)")
-                                        except Exception as e:
-                                            logger.warning(f"Failed to save audio file: {e}")
-                                    else:
-                                        logger.debug(f"Skipping audio file save: duration too short ({duration_ms:.0f}ms < {MIN_AUDIO_DURATION_MS}ms)")
-                                else:
-                                    logger.debug(f"Skipping audio file save: size too small ({len(audio_bytes)} bytes < {MIN_AUDIO_SIZE} bytes)")
-                        
                         if is_final:
-                            await ws_manager.process_audio_final(client_id, audio_bytes, profanity_words, player_name, session_id)
+                            await ws_manager.process_audio_final(client_id, audio_bytes, profanity_words, player_name, session_id, language_word_lists)
                         else:
-                            await ws_manager.process_audio(client_id, audio_bytes, profanity_words, player_name, session_id)
+                            await ws_manager.process_audio(client_id, audio_bytes, profanity_words, player_name, session_id, language_word_lists)
                     except Exception as e:
-                        logger.error(f"Failed to decode audio data: {e}")
-                        await ws_manager.send_message(client_id, {
-                            "type": "error",
-                            "message": "Invalid audio data",
-                            "status": "error"
-                        })
+                        logger.error(f"Audio decode failed: {e}")
                         
             elif message_type == "ping":
-                await ws_manager.send_message(client_id, {
-                    "type": "pong",
-                    "timestamp": data.get("timestamp", 0)
-                })
+                await ws_manager.send_message(client_id, {"type": "pong", "timestamp": data.get("timestamp", 0)})
             
     except WebSocketDisconnect:
         ws_manager.disconnect(client_id)
@@ -561,7 +429,6 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
 if __name__ == "__main__":
     config = load_config()
     server_config = config.get("server", {})
-    
     uvicorn.run(
         "main:app",
         host=server_config.get("host", "0.0.0.0"),

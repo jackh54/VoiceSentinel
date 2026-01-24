@@ -1,0 +1,31 @@
+{
+    "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PTERODACTYL PANEL - PTERODACTYL.IO",
+    "meta": {
+        "version": "PTDL_v2",
+        "update_url": null
+    },
+    "exported_at": "2025-01-24T00:00:00Z",
+    "name": "VoiceSentinel Processor",
+    "author": "panda@pandadevv.dev",
+    "description": "VoiceSentinel voice processing backend using Faster Whisper for transcription",
+    "features": null,
+    "docker_images": {
+        "ghcr.io/parkervcp/yolks:python_3.11": "ghcr.io/parkervcp/yolks:python_3.11"
+    },
+    "file_denylist": [],
+    "startup": "bash -lc 'set -e; export TMPDIR=\"$HOME/tmp\" PIP_NO_CACHE_DIR=1 PIP_PROGRESS_BAR=off; mkdir -p \"$TMPDIR\"; [ -d venv ] || python3 -m venv venv; . venv/bin/activate; python -m pip install -U pip setuptools wheel; python -m pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt; [ -d app ] && [ ! -f app/__init__.py ] && :> app/__init__.py || true; if [ -d voicesentinel/.git ]; then echo \"Checking for updates...\"; cd voicesentinel; git fetch origin main 2>/dev/null || true; LATEST=$(git rev-parse origin/main 2>/dev/null || echo \"\"); CURRENT=$(git rev-parse HEAD 2>/dev/null || echo \"\"); cd ..; if [ -n \"$LATEST\" ] && [ -n \"$CURRENT\" ] && [ \"$LATEST\" != \"$CURRENT\" ]; then echo \"\"; echo \"============================================================\"; echo \"WARNING:  UPDATE AVAILABLE FOR VOICESENTINEL PROCESSOR\"; echo \"============================================================\"; echo \"Current: $(cd voicesentinel && git rev-parse --short HEAD 2>/dev/null || echo unknown)\"; echo \"Latest:  $(cd voicesentinel && git rev-parse --short origin/main 2>/dev/null || echo unknown)\"; echo \"\"; echo \"To update, re-run the installation script.\"; echo \"============================================================\"; echo \"\"; sleep 3; fi; fi; exec python -m uvicorn app.main:app --host 0.0.0.0 --port ${SERVER_PORT} --workers 1'",
+    "config": {
+        "files": "{}",
+        "startup": "{\r\n    \"done\": \"VoiceSentinel Processor started\"\r\n}",
+        "logs": "{}",
+        "stop": "^C"
+    },
+    "scripts": {
+        "installation": {
+            "script": "#!/bin/bash\nset -euo pipefail\ncd /mnt/server\n\napt-get update\napt-get install -y ffmpeg opus-tools curl git\nrm -rf /var/lib/apt/lists/*\n\n# Get code (full clone for update checking)\nif [ ! -d voicesentinel ]; then\n  git clone https://github.com/jackh54/voicesentinel.git\nelse\n  cd voicesentinel\n  git fetch origin 2>/dev/null || true\n  git reset --hard origin/main 2>/dev/null || true\n  cd ..\nfi\n\n# Place backend at server root\nrm -rf app || true\nrm -f requirements.txt || true\ncp -r voicesentinel/processor-voicesentinel/app ./app\ncp voicesentinel/processor-voicesentinel/requirements.txt ./requirements.txt || true\n\n# Config: use repo example if present, else minimal\nif [ -f voicesentinel/processor-voicesentinel/config.example.json ] && [ ! -f config.json ]; then\n  cp voicesentinel/processor-voicesentinel/config.example.json ./config.json\nelif [ ! -f config.json ]; then\n  echo '{}' > config.json\nfi\n\nmkdir -p models /tmp/whisper_cache\n\n# Make sure user-local pip bin is in PATH at runtime\nif ! grep -q '/home/container/.local/bin' .profile 2>/dev/null; then\n  echo 'export PATH=\"/home/container/.local/bin:$PATH\"' >> .profile\nfi\n\necho \"Install complete.\"",
+            "container": "ghcr.io/pterodactyl/installers:debian",
+            "entrypoint": "/bin/bash"
+        }
+    },
+    "variables": []
+}

@@ -24,23 +24,23 @@ class VoiceSentinelTestClient:
     async def connect(self):
         """Connect to the WebSocket server"""
         try:
-            print(f"🔗 Connecting to {self.websocket_url}...")
+            print(f"Connecting to {self.websocket_url}...")
             self.websocket = await websockets.connect(self.websocket_url)
-            print("✅ Connected successfully!")
+            print("Connected successfully!")
             return True
         except Exception as e:
-            print(f"❌ Connection failed: {e}")
+            print(f"Connection failed: {e}")
             return False
     
     async def disconnect(self):
         """Disconnect from the WebSocket server"""
         if self.websocket:
             await self.websocket.close()
-            print("🔌 Disconnected")
+            print("Disconnected")
     
     def generate_test_audio(self, duration=2, sample_rate=16000, frequency=440):
         """Generate a test audio WAV file in memory"""
-        print(f"🎵 Generating {duration}s test audio at {frequency}Hz...")
+        print(f"Generating {duration}s test audio at {frequency}Hz...")
         
         # Generate sine wave
         frames = int(duration * sample_rate)
@@ -74,25 +74,25 @@ class VoiceSentinelTestClient:
         for sample in audio_data:
             wav_data += sample
         
-        print(f"📊 Generated WAV file: {len(wav_data)} bytes")
+        print(f"Generated WAV file: {len(wav_data)} bytes")
         return wav_data
     
     def load_audio_file(self, file_path):
         """Load audio file from disk"""
         try:
-            print(f"📁 Loading audio file: {file_path}")
+            print(f"Loading audio file: {file_path}")
             with open(file_path, 'rb') as f:
                 audio_data = f.read()
-            print(f"📊 Loaded audio file: {len(audio_data)} bytes")
+            print(f"Loaded audio file: {len(audio_data)} bytes")
             return audio_data
         except Exception as e:
-            print(f"❌ Failed to load audio file: {e}")
+            print(f"Failed to load audio file: {e}")
             return None
     
     async def send_audio(self, audio_data, profanity_words=None):
         """Send audio data via WebSocket"""
         if not self.websocket:
-            print("❌ Not connected to WebSocket")
+            print("ERROR: Not connected to WebSocket")
             return False
         
         if profanity_words is None:
@@ -109,22 +109,22 @@ class VoiceSentinelTestClient:
                 "profanity_words": profanity_words
             }
             
-            print(f"📤 Sending audio chunk ({len(audio_data)} bytes)...")
+            print(f"Sending audio chunk ({len(audio_data)} bytes)...")
             await self.websocket.send(json.dumps(message))
-            print("✅ Audio sent successfully!")
+            print("Audio sent successfully!")
             return True
             
         except Exception as e:
-            print(f"❌ Failed to send audio: {e}")
+            print(f"Failed to send audio: {e}")
             return False
     
     async def listen_for_responses(self, timeout=30):
         """Listen for responses from the server"""
         if not self.websocket:
-            print("❌ Not connected to WebSocket")
+            print("ERROR: Not connected to WebSocket")
             return
         
-        print(f"👂 Listening for responses (timeout: {timeout}s)...")
+        print(f"Listening for responses (timeout: {timeout}s)...")
         start_time = time.time()
         
         try:
@@ -141,14 +141,14 @@ class VoiceSentinelTestClient:
                         response = json.loads(message)
                         await self.handle_response(response)
                     except json.JSONDecodeError:
-                        print(f"⚠️  Received non-JSON message: {message}")
+                        print(f"WARNING: Received non-JSON message: {message}")
                         
                 except asyncio.TimeoutError:
                     # Continue listening
                     continue
                     
         except Exception as e:
-            print(f"❌ Error while listening: {e}")
+            print(f"Error while listening: {e}")
     
     async def handle_response(self, response):
         """Handle different types of responses"""
@@ -156,24 +156,24 @@ class VoiceSentinelTestClient:
         
         if msg_type == "status":
             status = response.get("status", "unknown")
-            print(f"📋 Status update: {status}")
+            print(f"Status update: {status}")
             
         elif msg_type == "transcription_result":
             transcript = response.get("transcript", "")
             is_profane = response.get("is_profane", False)
             status = response.get("status", "unknown")
             
-            print(f"📝 Transcription result:")
+            print(f"Transcription result:")
             print(f"   Text: '{transcript}'")
             print(f"   Profane: {'Yes' if is_profane else 'No'}")
             print(f"   Status: {status}")
             
         elif msg_type == "error":
             error_msg = response.get("message", "Unknown error")
-            print(f"❌ Error from server: {error_msg}")
+            print(f"Error from server: {error_msg}")
             
         else:
-            print(f"❓ Unknown message type '{msg_type}': {response}")
+            print(f"Unknown message type '{msg_type}': {response}")
     
     async def test_health_endpoint(self):
         """Test the health endpoint"""
@@ -183,16 +183,16 @@ class VoiceSentinelTestClient:
                 async with session.get(f"http://{self.host}:{self.port}/health") as response:
                     if response.status == 200:
                         data = await response.json()
-                        print(f"✅ Health check passed: {data}")
+                        print(f"Health check passed: {data}")
                         return True
                     else:
-                        print(f"❌ Health check failed: {response.status}")
+                        print(f"Health check failed: {response.status}")
                         return False
         except ImportError:
-            print("⚠️  aiohttp not available, skipping health check")
+            print("WARNING: aiohttp not available, skipping health check")
             return True
         except Exception as e:
-            print(f"❌ Health check error: {e}")
+            print(f"Health check error: {e}")
             return False
     
     async def test_stats_endpoint(self):
@@ -203,52 +203,52 @@ class VoiceSentinelTestClient:
                 async with session.get(f"http://{self.host}:{self.port}/stats") as response:
                     if response.status == 200:
                         data = await response.json()
-                        print(f"📊 Stats: {data}")
+                        print(f"Stats: {data}")
                         return True
                     else:
-                        print(f"❌ Stats check failed: {response.status}")
+                        print(f"Stats check failed: {response.status}")
                         return False
         except ImportError:
-            print("⚠️  aiohttp not available, skipping stats check")
+            print("WARNING: aiohttp not available, skipping stats check")
             return True
         except Exception as e:
-            print(f"❌ Stats check error: {e}")
+            print(f"Stats check error: {e}")
             return False
 
 async def run_full_test(host="localhost", port=28472, audio_file=None):
     """Run a complete test of the WebSocket connection"""
-    print("🚀 Starting VoiceSentinel WebSocket Test")
+    print("Starting VoiceSentinel WebSocket Test")
     print("=" * 50)
     
     client = VoiceSentinelTestClient(host, port)
     
     # Test 1: Health check
-    print("\n1️⃣ Testing health endpoint...")
+    print("\n[1] Testing health endpoint...")
     await client.test_health_endpoint()
     
     # Test 2: Stats check
-    print("\n2️⃣ Testing stats endpoint...")
+    print("\n[2] Testing stats endpoint...")
     await client.test_stats_endpoint()
     
     # Test 3: WebSocket connection
-    print("\n3️⃣ Testing WebSocket connection...")
+    print("\n[3] Testing WebSocket connection...")
     if not await client.connect():
-        print("❌ Test failed: Cannot connect to WebSocket")
+        print("Test failed: Cannot connect to WebSocket")
         return False
     
     # Test 4: Audio processing
-    print("\n4️⃣ Testing audio processing...")
+    print("\n[4] Testing audio processing...")
     
     # Prepare audio data
     if audio_file and Path(audio_file).exists():
         audio_data = client.load_audio_file(audio_file)
     else:
         if audio_file:
-            print(f"⚠️  Audio file {audio_file} not found, using generated audio")
+            print(f"WARNING: Audio file {audio_file} not found, using generated audio")
         audio_data = client.generate_test_audio(duration=3)
     
     if audio_data is None:
-        print("❌ Test failed: Cannot prepare audio data")
+        print("Test failed: Cannot prepare audio data")
         await client.disconnect()
         return False
     
@@ -263,7 +263,7 @@ async def run_full_test(host="localhost", port=28472, audio_file=None):
     success = await client.send_audio(audio_data, test_profanity)
     
     if not success:
-        print("❌ Test failed: Cannot send audio")
+        print("Test failed: Cannot send audio")
         listen_task.cancel()
         await client.disconnect()
         return False
@@ -272,21 +272,21 @@ async def run_full_test(host="localhost", port=28472, audio_file=None):
     await listen_task
     
     # Test 5: Disconnect
-    print("\n5️⃣ Testing disconnect...")
+    print("\n[5] Testing disconnect...")
     await client.disconnect()
     
-    print("\n🎉 Test completed!")
+    print("\nTest completed!")
     return True
 
 async def interactive_test(host="localhost", port=28472):
     """Run an interactive test session"""
-    print("🎮 Interactive VoiceSentinel WebSocket Test")
+    print("Interactive VoiceSentinel WebSocket Test")
     print("=" * 50)
     
     client = VoiceSentinelTestClient(host, port)
     
     if not await client.connect():
-        print("❌ Cannot connect to WebSocket")
+        print("Cannot connect to WebSocket")
         return
     
     print("\nCommands:")
@@ -339,9 +339,9 @@ def main():
         else:
             asyncio.run(run_full_test(args.host, args.port, args.audio))
     except KeyboardInterrupt:
-        print("\n👋 Test interrupted by user")
+        print("\nTest interrupted by user")
     except Exception as e:
-        print(f"❌ Test failed with error: {e}")
+        print(f"Test failed with error: {e}")
 
 if __name__ == "__main__":
     main()

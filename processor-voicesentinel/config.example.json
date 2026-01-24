@@ -2,69 +2,50 @@
   "server": {
     "host": "0.0.0.0",
     "port": 28472,
-    "workers": 4,
-    "cors": {
-      "allow_origins": ["<your-transcriber-url>"],
-      "allow_credentials": true,
-      "allow_methods": ["GET", "POST", "DELETE"],
-      "allow_headers": [
-        "Content-Type", 
-        "Authorization", 
-        "Accept",
-        "User-Agent",
-        "X-Requested-With"
-      ]
-    }
-  },
-  "security": {
-    "api_keys": [],
-    "rate_limit": {
-      "authenticated": {
-        "window_seconds": 60,
-        "max_requests": 1000,
-        "block_duration_seconds": 300
-      },
-      "unauthenticated": {
-        "window_seconds": 60,
-        "max_requests": 10,
-        "block_duration_seconds": 1800
-      }
-    }
+    "server_key": ""
   },
   "transcription": {
-    "engine": "whisper",
-    "model": "tiny.en",
-    "language": "en",
-    "timeout_seconds": 90,
-    "cpu_threads": 1,
-    "options": {
-      "fp16": false,
-      "temperature": 0.0,
-      "condition_on_previous_text": false,
-      "no_speech_threshold": 0.7,
-      "beam_size": 1,
-      "best_of": 1,
-      "suppress_blank": true,
-      "initial_prompt": "Player voice chat audio containing speech."
-    }
-  },
-  "processing": {
-    "max_concurrent_jobs": 4,
-    "queue_warning_threshold": 200,
-    "max_queue_size": 1000,
-    "timeout_seconds": 90,
-    "retry_attempts": 2,
-    "retry_delay_seconds": 1
+    "model": "Systran/faster-whisper-base",
+    "language": "auto",
+    "device": "cpu",
+    "compute_type": "int8",
+    "timeout_seconds": 30,
+    "cpu_threads": 2,
+    "huggingface_token": "",
+    "_comment": "Model options: base (fastest, ~150MB), small (~500MB), medium (~1.5GB), large-v2/v3 (~3GB). Language: 'auto' for automatic detection (recommended for multi-language), 'en' for English-only (forces English transcription, may misinterpret other languages)"
   },
   "audio": {
-    "max_file_size": 5242880,
-    "supported_formats": ["wav", "mp3", "ogg", "flac"],
     "min_audio_length_ms": 50,
     "max_audio_length_ms": 30000,
-    "min_talking_time_ms": 100,
-    "max_chunk_size": 262144,
-    "max_total_size": 5242880,
     "sample_rate": 16000,
     "channels": 1
+  },
+  "recordings": {
+    "save_mode": "none",
+    "save_path": "recordings/",
+    "retention_days": 7
+  },
+  "cors": {
+    "allow_origins": ["*"],
+    "allow_credentials": true,
+    "allow_methods": ["*"],
+    "allow_headers": ["*"]
+  },
+  "llm_profanity": {
+    "enabled": false,
+    "provider": "ollama",
+    "api_key": "http://localhost:11434",
+    "model": "llama2",
+    "timeout_seconds": 15,
+    "confidence_threshold": 0.7,
+    "strictness": "medium",
+    "max_concurrent_requests": 3,
+    "fallback_on_error": true,
+    "_comment": "LLM profanity detection. Providers: 'openai', 'anthropic', 'ollama'. For Ollama: provider='ollama', api_key='http://localhost:11434' (or empty for default), model='llama2' (or any pulled model). strictness: 'strict' (only severe), 'medium' (default), 'lenient' (obvious only). Make sure Ollama is running and model is pulled (e.g., 'ollama pull llama2')."
+  },
+  "console": {
+    "log_transcripts": false,
+    "live_display": true,
+    "_comment": "console.log_transcripts: Show recent transcripts in console status. console.live_display: Enable live updating console status (set to false to disable and reduce console spam)"
   }
-} 
+}

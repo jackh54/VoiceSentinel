@@ -1,250 +1,171 @@
 # VoiceSentinel
 
-[![DMCA.com Protection Status](https://images.dmca.com/Badges/dmca-badge-w100-5x1-01.png?ID=29324560-3885-4048-a05b-f106d721df36)](https://www.dmca.com/r/zz2wk5w)
-[![Java](https://img.shields.io/badge/Java-17orange.svg)](https://www.oracle.com/java/)
+[![Java](https://img.shields.io/badge/Java-17-orange.svg)](https://www.oracle.com/java/)
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![Minecraft](https://img.shields.io/badge/Minecraft-1.21+-green.svg)](https://www.minecraft.net/)
 
+VoiceSentinel is a real-time voice moderation system for Minecraft servers using Simple Voice Chat. It combines a Java plugin with a Python processor for speech-to-text transcription and content filtering.
 
-VoiceSentinel is a comprehensive real-time voice moderation system for Minecraft servers using Simple Voice Chat. It combines a Java-based Minecraft plugin with a Python backend processor to provide advanced speech-to-text transcription and content filtering capabilities.
-
-> ⚠️ **Important:** VoiceSentinel setup requires basic knowledge of Linux and Docker. If you are new to these technologies, we recommend seeking assistance from someone experienced before continuing. For installation support, join my Discord. (link at the bottom).
-
-## 🌟 Features
+## Features
 
 ### Core Functionality
-- **Real-time voice transcription** using OpenAI Whisper models
-- **Advanced profanity detection** with customizable word lists and pattern matching
-- **Configurable audio processing** with chunk size, sample rate, and duration limits
-- **Rate limiting and API key authentication** for secure integration
-- **Queue-based processing** for handling high-volume voice chat
-- **Comprehensive logging and monitoring** for server administration
+- Real-time voice transcription using Faster Whisper (Systran/faster-whisper-large-v3)
+- Multi-language support with automatic detection
+- Advanced profanity detection with customizable word lists
+- Configurable audio processing
+- Rate limiting and authentication
+- Queue-based processing for high-volume voice chat
+- Recording save functionality (all, flagged, or none)
 
 ### Technical Features
-- **Asynchronous processing** with background workers
-- **Docker support** for easy deployment
-- **CPU-optimized** for cost-effective hosting
-- **REST API** for integration with other services
-- **File-based result delivery** for reliable communication
-- **Automatic cleanup** of temporary files and processed results
-- **Health monitoring** and system statistics
+- Asynchronous processing
+- Docker support
+- CPU-optimized for cost-effective hosting
+- WebSocket-based communication
+- Automatic cleanup of temporary files
+- Health monitoring
 
 ### Minecraft Integration
-- **Folia & Paper compatibility** for modern server software, might work for bukkit/spigot, but who cares about those anymore?
-- **Simple Voice Chat integration** for seamless voice capture
+- Folia & Paper compatibility
+- Simple Voice Chat integration
 
-## 📋 Requirements
+## Requirements
 
 ### Server Requirements
-- **Java 17+** for the Minecraft plugin
-- **Python 3.8+** for the backend processor
-- **Minecraft 1.21+** Folia or Paper
-- **Simple Voice Chat** plugin installed
-- **Minimum 4GB RAM** (8GB+ recommended)
-- **Multi-core CPU** for optimal processing
+- Java 17+ for the Minecraft plugin
+- Python 3.8+ for the processor
+- Minecraft 1.21+ Folia or Paper
+- Simple Voice Chat plugin
+- Minimum 4GB RAM (8GB+ recommended)
+- Multi-core CPU
 
 ### Dependencies
-- **Backend Processor**: FastAPI, Whisper, PyTorch, NumPy, SciPy
+- Backend: FastAPI, Faster Whisper, NumPy, WebSockets
 
-> **Using Docker is recommended to run the backend processor, as it installs this for you.**
-
-## 🚀 Quick Start
+## Quick Start
 
 ### 1. Backend Setup
 
 ```bash
-# Clone the repository, it is recommended to download the latest release though.
 git clone https://github.com/jackh54/VoiceSentinel.git
 cd VoiceSentinel/processor-voicesentinel
 
-# Copy and edit the configuration file
 cp config.example.json config.json
 # Edit config.json with your settings
 
-# Start the backend processor in the background using Docker Compose
 docker compose up -d
 
-# To view logs or check status:
+# View logs
 docker compose logs -f
-docker compose ps
-
-# To stop the processor:
-docker compose down
 ```
 
 ### 2. Plugin Installation
 
-Install and configure the plugin as described in the plugin's documentation. Make sure to set the same server-key in both the processor & plugin configuration
+Install and configure the plugin. Set the same server-key in both processor & plugin configuration.
 
 ### 3. Configuration
 
-Configure the backend using `config.json` (see below). For plugin configuration, refer to the plugin's own documentation.
+#### Backend Configuration (config.json)
 
-#### Sample Backend Configuration (`config.json`)
 ```json
 {
   "server": {
     "host": "0.0.0.0",
     "port": 28472,
-    "workers": 4,
-    "cors": {
-      "allow_origins": ["*"],
-      "allow_credentials": true,
-      "allow_methods": ["*"],
-      "allow_headers": ["*"]
-    }
-  },
-  "security": {
-    "api_keys": [],
-    "rate_limit": {
-      "authenticated": {
-        "window_seconds": 60,
-        "max_requests": 1000,
-        "block_duration_seconds": 300
-      },
-      "unauthenticated": {
-        "window_seconds": 60,
-        "max_requests": 10,
-        "block_duration_seconds": 1800
-      }
-    }
+    "server_key": "your-secure-key-here"
   },
   "transcription": {
-    "engine": "whisper",
-    "model": "tiny.en",
-    "language": "en",
-    "timeout_seconds": 90,
-    "cpu_threads": 1,
-    "options": {
-      "fp16": false,
-      "temperature": 0.0,
-      "condition_on_previous_text": false,
-      "no_speech_threshold": 0.7,
-      "beam_size": 1,
-      "best_of": 1,
-      "suppress_blank": true,
-      "initial_prompt": "Player voice chat audio containing speech."
-    }
+    "model": "Systran/faster-whisper-large-v3",
+    "language": "auto",
+    "device": "cpu",
+    "compute_type": "int8"
   },
-  "processing": {
-    "max_concurrent_jobs": 4,
-    "queue_warning_threshold": 200,
-    "max_queue_size": 1000,
-    "timeout_seconds": 90,
-    "retry_attempts": 2,
-    "retry_delay_seconds": 1
-  },
-  "audio": {
-    "max_chunk_size": 262144,
-    "max_total_size": 5242880,
-    "sample_rate": 16000,
-    "channels": 1,
-    "min_length_ms": 300,
-    "max_length_ms": 15000
+  "recordings": {
+    "save_mode": "none",
+    "save_path": "recordings/",
+    "retention_days": 7
   }
-} 
+}
 ```
+
+Recording save modes:
+- `none` - Do not save recordings
+- `all` - Save all recordings
+- `flagged` - Save only flagged recordings
+
+### Privacy & Legal Notice
+
+**Important:** When using the `recordings` configuration (specifically `save_mode`, `save_path`, and `retention_days`), server operators must comply with all applicable local, state, and federal laws regarding voice recording and data privacy.
+
+**Legal Requirements:**
+- **Consent Laws:** You must comply with all-party consent laws where applicable. In jurisdictions requiring all-party consent, all participants must be informed and consent to recording before any recording occurs.
+- **User Notification:** Server operators are required to inform all users when voice recording is enabled. This notification must be clear, conspicuous, and provided before recording begins.
+- **Data Retention:** Configure `retention_days` to reflect your compliance requirements. Limit retention periods to the minimum necessary for your use case and delete recordings promptly after the retention period expires.
+- **Data Access & Security:** Implement appropriate access controls and security measures for recorded data. Handle all recorded data in accordance with GDPR, CCPA, and other applicable privacy regulations.
+- **Best Practices:** Review and update both `retention_days` and `save_mode` settings to ensure they align with your legal obligations, privacy policy, and security best practices. Consider using `save_mode: "flagged"` to minimize data collection when possible.
 
 ### Production Deployment
 
-1. **Use a reverse proxy** (nginx/Apache) for SSL termination
-2. **Implement backup strategies** for configuration and logs (*optional*)
+1. Use a reverse proxy (nginx/Apache) for SSL termination
+2. Configure proper server keys for authentication
+3. Set up health checks for container orchestration
 
-### Performance Tuning
+## Performance Tuning
 
-- **Adjust worker count** based on CPU cores
-- **Optimize queue sizes** for your server load
-- **Configure memory limits** for audio processing
-- **Use appropriate Whisper models** (tiny/base/small/medium/large)
-- **Monitor processing times** and adjust timeouts
+- Use Faster Whisper (default) for best performance
+- Choose model size: `tiny` (fastest) to `large-v3` (most accurate)
+- Adjust `compute_type`: `int8` for CPU (fastest)
+- Configure CPU threads based on your cores
 
-## 🛡️ Security
+## Security
 
-VoiceSentinel includes comprehensive security features:
+- API key authentication
+- Rate limiting
+- Input validation
+- Secure file handling with automatic cleanup
+- CORS configuration
 
-- **API key authentication** for all endpoints
-- **Rate limiting** to prevent abuse
-- **Input validation** and sanitization
-- **Secure file handling** with automatic cleanup
-- **CORS configuration** for web integration
-- **Trusted host middleware** for production deployments
+For security vulnerabilities, see SECURITY.md.
 
-For security vulnerabilities, please see our [Security Policy](SECURITY.md).
-
-## 📈 Monitoring and Logging
+## Monitoring and Logging
 
 ### Log Files
 - `logs/processor.log` - Backend processing logs
 
-### Metrics
-- Processing queue length
-- Average processing time
-- Error rates and types
-- Memory and CPU usage
-- Audio processing statistics
+### Endpoints
+- `/health` - Health check
+- `/stats` - System statistics
 
-### Health Checks
-- `/health` endpoint for monitoring
-- Automatic worker health monitoring
-- Queue overflow detection
-- Resource usage alerts
+## License
 
-## 🤝 Contributing
+This project is licensed under the VoiceSentinel Source-Available License v1.0.
+You may view and contribute to the code, but may not use, redistribute, or incorporate it
+in your own projects without explicit permission.
 
-I welcome contributions! Please see the contributing guidelines:
+Unauthorized use will result in DMCA takedowns and legal action.
 
-1. **Fork the repository**
-2. **Create a feature branch** (`git checkout -b feature/amazing-feature`)
-3. **Commit your changes** (`git commit -m 'Add amazing feature'`)
-4. **Push to the branch** (`git push origin feature/amazing-feature`)
-5. **Open a Pull Request**
+See LICENSE file for details.
 
-### Development Setup
+## Support
 
-```bash
-# Backend development
-cd processor-voicesentinel
-pip install -r requirements.txt
-pip install -e .
-```
+- Documentation: [Gitbook](https://pandascript.gitbook.io/pandascript/voicesentinel-processor)
+- Discord: [Join our community](https://discord.gg/JAJyuzdgHZ)
+- Issues: [GitHub Issues](https://github.com/jackh54/VoiceSentinel/issues)
+- Security: security@pandadevv.dev
 
-## 📄 License
+## Roadmap
 
-This project is licensed under the **VoiceSentinel Source-Available License v1.0**.  
-You are free to view and contribute to the code, but **you may not use, redistribute, or incorporate it in your own projects**, commercially or non-commercially, without explicit permission.
+### Version 3.0.0 (Current)
+- Migrated to Faster Whisper large-v3 model
+- Multi-language support with auto-detection
+- Recording save functionality
+- Simplified configuration
+- Improved performance
 
-**Unauthorized use will result in DMCA takedowns and legal action.**
+### Future Plans
+- Audio clip attachments for Discord webhooks
+- Web dashboard
+- Player reputation system
+- Microservices architecture for scalability
 
-See the full license in the [LICENSE](LICENSE) file.
-
-
-## 🆘 Support
-
-- **Documentation**: [Gitbook](https://pandascript.gitbook.io/pandascript/voicesentinel-processor)
-- **Discord**: [Join our community](https://discord.gg/JAJyuzdgHZ)
-- **Issues**: [GitHub Issues (processor related issues only)](https://github.com/jackh54/VoiceSentinel/issues)
-- **Security**:security@pandadevv.dev](mailto:security@pandadevv.dev)
-
-## 🗺️ Roadmap
-
-### Roadmap (v1.0.0+)
-
-- [ ] Improved voice data transmission to API
-- [ ] Basic multi-language support
-- [ ] Improved profanity detection
-- [ ] Web dashboard (maybe?)
-- [ ] Player reputation system (initial version)
-- [ ] Proper Pterodactyl Egg setup (current egg shouldn't be used for production, use a python egg)
-
-### Technical Improvements
-
-- [ ] Optimize performance for large servers
-- [ ] Microservices for scalability
-- [ ] Add GraphQL API
-- [ ] WebSocket support for real-time updates
-- [ ] Improve caching
-- [ ] Kubernetes support
-
----
-
-*Built with ❤️ by pandadevv*
+Built by pandadevv

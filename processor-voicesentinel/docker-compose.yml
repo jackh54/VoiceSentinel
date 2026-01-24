@@ -2,29 +2,23 @@ version: '3.8'
 
 services:
   voicesentinel-processor:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    build: .
     container_name: voicesentinel-processor
+    restart: unless-stopped
     ports:
       - "28472:28472"
     volumes:
-      - ./config.json:/app/config.json:ro
-      - ./models:/app/models
-      - ./logs:/app/logs
+      - ./config.json:/app/config.json
+      - ./recordings:/app/recordings
+      - whisper_cache:/tmp/whisper_cache
     environment:
-      - PYTHONUNBUFFERED=1
-      - PYTHONDONTWRITEBYTECODE=1
-      # Remove thread envs if not needed
-    restart: unless-stopped
+      - CONFIG_PATH=/app/config.json
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:28472/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
-    cap_add:
-      - SYS_NICE
-    ulimits:
-      nofile: 65536
-      nproc: 8192
+      start_period: 10s
+
+volumes:
+  whisper_cache:

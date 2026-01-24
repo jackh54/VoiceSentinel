@@ -53,7 +53,9 @@ We consider security research conducted under this policy as "authorized" and wi
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 1.0.x   | ✅ |
+| 1.2.x   | ✅ |
+| 1.1.x   | ✅ |
+| 1.0.x   | ⚠️ Deprecated |
 
 ## Security Best Practices
 
@@ -85,4 +87,4 @@ VoiceSentinel includes several security features:
 
 ---
 
-Last updated: 2025-07-16
+Last updated: 2026-01-24

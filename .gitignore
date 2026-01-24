@@ -204,3 +204,5 @@ local.properties
 
 # plugin is closed source (go buy it!!)
 plugin-voicesentinel/
+
+testserver/

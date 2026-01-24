@@ -1,28 +1,5 @@
 fastapi==0.115.14
 uvicorn[standard]==0.35.0
-pydantic==2.5.0
-
-# Audio processing
-torch==2.1.2 --extra-index-url https://download.pytorch.org/whl/cpu
-torchaudio==2.1.2 --extra-index-url https://download.pytorch.org/whl/cpu
-openai-whisper==20231117
-
-# Audio handling
+faster-whisper>=1.0.0
 numpy==1.26.4
-scipy==1.11.4
-
-# Performance optimization
-numba==0.61.2
-
-# WebSocket support
 websockets==12.0
-
-# System monitoring
-psutil==7.0.0
-
-# Development and testing
-pytest==7.4.4
-httpx==0.28.1
-
-# Logging
-colorama==0.4.6
