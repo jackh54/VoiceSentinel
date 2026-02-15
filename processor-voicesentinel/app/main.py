@@ -26,7 +26,6 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)]
 )
 
-# Enable progress bars for model downloads
 os.environ['HF_HUB_DISABLE_PROGRESS_BARS'] = '0'
 logging.getLogger("huggingface_hub").setLevel(logging.INFO)
 logging.getLogger("huggingface_hub.file_download").setLevel(logging.INFO)
@@ -76,6 +75,9 @@ def get_default_config():
             "sample_rate": 16000,
             "channels": 1
         },
+        "processing": {
+            "queue_max_size": 500
+        },
         "recordings": {
             "save_mode": "none",
             "save_path": "recordings/",
@@ -98,10 +100,15 @@ class WebSocketManager:
         self.audio_buffers = {}
         self.buffer_metadata = {}
         self.console_status = None
+        self._processing_queue = None
+        self._worker_task = None
     
     async def initialize(self, config):
         self.config = config
         self.console_status = ConsoleStatus(config)
+        queue_max = config.get("processing", {}).get("queue_max_size", 500)
+        self._processing_queue = asyncio.Queue(maxsize=max(1, queue_max))
+        self._worker_task = asyncio.create_task(self._processing_worker())
         transcription_config = config.get("transcription", {})
         
         self.transcriber = create_transcriber(
@@ -137,6 +144,10 @@ class WebSocketManager:
                 logger.error(f"Send failed: {e}")
                 self.disconnect(client_id)
     
+    def _max_buffer_bytes(self) -> int:
+        max_ms = self.config.get("audio", {}).get("max_audio_length_ms", 30000)
+        return 44 + int((max_ms * 32))
+    
     async def process_audio(self, client_id: str, audio_data: bytes, profanity_words: list, player_name: str = None, session_id: str = None, language_word_lists: dict = None):
         try:
             self.buffer_metadata[client_id] = {
@@ -148,8 +159,17 @@ class WebSocketManager:
             
             if client_id not in self.audio_buffers:
                 self.audio_buffers[client_id] = b''
-            
-            self.audio_buffers[client_id] += audio_data
+            buf = self.audio_buffers[client_id]
+            max_bytes = self._max_buffer_bytes()
+            if len(buf) + len(audio_data) > max_bytes:
+                keep = max_bytes - len(audio_data)
+                if keep <= 0:
+                    buf = audio_data[-max_bytes:]
+                else:
+                    buf = (buf[-keep:] if len(buf) > keep else buf) + audio_data
+                self.audio_buffers[client_id] = buf
+            else:
+                self.audio_buffers[client_id] = buf + audio_data
         except Exception as e:
             logger.error(f"Audio buffering failed: {e}")
     
@@ -158,9 +178,30 @@ class WebSocketManager:
             final_audio = self.audio_buffers.get(client_id, b'') + audio_data
             self.audio_buffers[client_id] = b''
             
-            if self._should_process_audio(final_audio):
-                await self._process_audio_async(client_id, final_audio, profanity_words, player_name, session_id, language_word_lists)
-            else:
+            if not self._should_process_audio(final_audio):
+                await self.send_message(client_id, {
+                    "type": "final_transcript",
+                    "transcript": "",
+                    "flagged": False,
+                    "bad_words": [],
+                    "player": player_name or client_id,
+                    "session_id": session_id or client_id,
+                    "processing_time_ms": 0,
+                    "detected_language": "unknown"
+                })
+                return
+            job = {
+                "client_id": client_id,
+                "final_audio": final_audio,
+                "profanity_words": profanity_words,
+                "player_name": player_name,
+                "session_id": session_id,
+                "language_word_lists": language_word_lists,
+            }
+            try:
+                self._processing_queue.put_nowait(job)
+            except asyncio.QueueFull:
+                logger.warning(f"Processing queue full, dropping recording for client {client_id}")
                 await self.send_message(client_id, {
                     "type": "final_transcript",
                     "transcript": "",
@@ -198,7 +239,6 @@ class WebSocketManager:
             audio_file = save_path / filename
             audio_file.write_bytes(audio_data)
             
-            # Save metadata
             metadata_file = save_path / f"{filename}.json"
             metadata = {
                 "timestamp": datetime.now().isoformat(),
@@ -214,14 +254,20 @@ class WebSocketManager:
         try:
             if len(audio_data) < 1000:
                 return False
-            min_duration = self.config.get("audio", {}).get("min_audio_length_ms", 500)
+            audio_config = self.config.get("audio", {})
+            min_duration = audio_config.get("min_audio_length_ms", 500)
+            max_duration = audio_config.get("max_audio_length_ms", 30000)
             estimated_duration_ms = (len(audio_data) - 44) / 32
-            return estimated_duration_ms >= min_duration
-        except:
+            if estimated_duration_ms < min_duration:
+                return False
+            if estimated_duration_ms > max_duration:
+                return False
+            return True
+        except Exception:
             return False
     
     async def _process_audio_async(self, client_id: str, audio_data: bytes, profanity_words: list, player_name: str = None, session_id: str = None, language_word_lists: dict = None):
-        processing_start_time = time.time()
+        processing_start_time = time.monotonic()
         self.console_status.increment_processing()
         try:
             if client_id not in self.active_connections:
@@ -229,15 +275,16 @@ class WebSocketManager:
             
             actual_player_name = player_name or client_id
             
+            transcription_timeout = self.config.get("transcription", {}).get("timeout_seconds", 30)
             transcript, detected_language = await asyncio.wait_for(
                 self.transcriber.transcribe(audio_data),
-                timeout=30.0
+                timeout=float(transcription_timeout)
             )
             
             if client_id not in self.active_connections:
                 return
             
-            processing_time_ms = int((time.time() - processing_start_time) * 1000)
+            processing_time_ms = max(0, int((time.monotonic() - processing_start_time) * 1000))
             
             language_profanity = []
             language_mute = []
@@ -308,11 +355,31 @@ class WebSocketManager:
             await self._save_recording(audio_data, actual_player_name, is_profane, transcript or "")
             
         except asyncio.TimeoutError:
-            logger.error(f"Processing timeout after 30 seconds")
+            logger.error(f"Processing timeout after {transcription_timeout}s")
         except Exception as e:
             logger.error(f"Processing failed: {e}")
         finally:
             self.console_status.decrement_processing()
+    
+    async def _processing_worker(self):
+        while self._processing_queue is not None:
+            try:
+                job = await self._processing_queue.get()
+                client_id = job["client_id"]
+                if client_id not in self.active_connections:
+                    continue
+                await self._process_audio_async(
+                    client_id,
+                    job["final_audio"],
+                    job["profanity_words"],
+                    job.get("player_name"),
+                    job.get("session_id"),
+                    job.get("language_word_lists"),
+                )
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Processing worker error: {e}")
 
 ws_manager = WebSocketManager()
 
@@ -332,6 +399,12 @@ async def lifespan(app: FastAPI):
         ws_manager.console_status.print_status(force=True)
     asyncio.create_task(console_update_task())
     yield
+    if ws_manager._worker_task is not None:
+        ws_manager._worker_task.cancel()
+        try:
+            await ws_manager._worker_task
+        except asyncio.CancelledError:
+            pass
 
 config = load_config()
 
@@ -358,9 +431,11 @@ async def health_check():
 
 @app.get("/stats")
 async def get_stats():
+    qsize = ws_manager._processing_queue.qsize() if ws_manager._processing_queue else 0
     return {
         "active_connections": len(ws_manager.active_connections),
-        "transcriber_ready": ws_manager.transcriber is not None
+        "transcriber_ready": ws_manager.transcriber is not None,
+        "processing_queue_size": qsize
     }
 
 @app.websocket("/ws/{client_id}")
@@ -377,7 +452,6 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                 server_key = data.get("server_key", "")
                 config_key = config.get("server", {}).get("server_key", "")
                 
-                # Allow auth if no key configured or key matches
                 if not config_key or server_key == config_key:
                     authenticated = True
                     await ws_manager.send_message(client_id, {"type": "auth_success"})

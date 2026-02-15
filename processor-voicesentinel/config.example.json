@@ -25,6 +25,9 @@
     "save_path": "recordings/",
     "retention_days": 7
   },
+  "processing": {
+    "queue_max_size": 500
+  },
   "cors": {
     "allow_origins": ["*"],
     "allow_credentials": true,

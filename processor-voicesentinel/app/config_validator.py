@@ -15,6 +15,7 @@ class ConfigValidator:
         self._validate_server(config)
         self._validate_transcription(config)
         self._validate_audio(config)
+        self._validate_processing(config)
         return len(self.errors) == 0, self.errors, []
     
     def _validate_server(self, config: Dict[str, Any]):
@@ -66,6 +67,18 @@ class ConfigValidator:
         
         if min_valid and max_valid and min_audio_length_ms >= max_audio_length_ms:
             self.errors.append(f"min_audio_length_ms must be less than max_audio_length_ms")
+    
+    def _validate_processing(self, config: Dict[str, Any]):
+        processing = config.get("processing", {})
+        if not processing:
+            return
+        qmax = processing.get("queue_max_size", 500)
+        try:
+            qmax = int(qmax)
+            if qmax < 1:
+                self.errors.append("processing.queue_max_size must be at least 1")
+        except (ValueError, TypeError):
+            self.errors.append(f"processing.queue_max_size must be an integer, got: {type(qmax).__name__}")
 
 def validate_config(config: Dict[str, Any]) -> Dict[str, Any]:
     validator = ConfigValidator()
