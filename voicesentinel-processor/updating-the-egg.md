@@ -1,5 +1,7 @@
 ---
-description: Update the VoiceSentinel Processor egg in Pterodactyl from older versions and apply the new startup command.
+description: >-
+  Update the VoiceSentinel Processor egg in Pterodactyl from older versions and
+  apply the new startup command.
 ---
 
 # Updating the egg
@@ -22,23 +24,21 @@ After the egg is updated, **reinstall the processor server** so it uses the new 
 4. Wait for the reinstall to finish. The panel will run the **new** egg install script, so you get the updated file layout and behavior (e.g. no `voicesentinel` folder, correct paths).
 
 {% hint style="warning" %}
-Reinstalling **deletes** the server’s files and runs the install from scratch. **Back up config.json** (and any custom files) before reinstalling. After reinstall, upload or paste **config.json** back and set **server_key** and other options again.
+Reinstalling **deletes** the server’s files and runs the install from scratch. **Back up config.json** (and any custom files) before reinstalling. After reinstall, upload or paste **config.json** back and set **server\_key** and other options again.
 {% endhint %}
 
 ## 3. Update the startup command
 
-The egg’s startup command can change between versions (e.g. different paths or no `cd /mnt/server`). After reinstalling:
+The egg’s startup command can change between versions
+
+After reinstalling:
 
 1. In the server’s **Startup** tab, check the **Startup Command**.
-2. Replace it with the **startup command from the current egg**. You can copy it from the egg JSON (look for the `startup` field in **processor-voicesentinel/egg-voice-sentinel-processor.json**) or, if your panel has “Reset to default,” use that so the command matches the updated egg.
+2. Replace it with the **startup command from the current egg**. You can copy it from the "Default Service Start Command" below the existing one.
 3. Save. Start the server and confirm it runs without path or “No such file or directory” errors.
 
 If you keep an old or custom startup command, the server may point at wrong paths and fail to start. Always use the startup command that comes with the egg version you imported.
 
-## Summary
 
-1. **Update the egg** in your nest (re-import or replace with the latest egg JSON).
-2. **Reinstall the processor server** so it uses the new install script; back up **config.json** first.
-3. **Set the startup command** to the one from the updated egg (copy from egg JSON or reset to default).
 
-Then restore **config.json**, set **server_key** and any other options, and start the server. For first-time setup, see [Pterodactyl Setup](pterodactyl-setup.md).
+For first-time setup, see [Pterodactyl Setup](pterodactyl-setup.md).
