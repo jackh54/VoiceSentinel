@@ -1,8 +1,11 @@
 # Getting your license key
 
-You can get your license key from [my Discord](https://discord.gg/JAJyuzdgHZ)
+License keys are handed out through [my key system](https://key.pandascript.dev). Get your key there, then put it in the plugin config. If you have any issues, join the [Discord](https://discord.gg/JAJyuzdgHZ)
 
-Configure it here:
+Open `plugins/VoiceSentinel/config.yml` and set:
 
-`license-key: "YOUR-KEY-HERE"`
+```yaml
+license-key: "your-actual-key-here"
+```
 
+Save the file, and continue configuring.

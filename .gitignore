@@ -1,0 +1,10 @@
+# Docs branch: only GitBook content is tracked. Ignore everything else.
+*
+!.gitignore
+!.gitbook.yaml
+!README.md
+!SUMMARY.md
+!voicesentinel-plugin/
+!voicesentinel-processor/
+!voicesentinel-plugin/**
+!voicesentinel-processor/**

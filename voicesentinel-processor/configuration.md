@@ -1,119 +1,136 @@
+---
+description: Processor config.json reference – server, transcription, audio, processing, recordings, CORS, and optional LLM profanity.
+---
+
 # Configuration
 
-### Copying the configuration
+Config file: **config.json** in the processor folder. You can point the app at a different path with the **CONFIG_PATH** environment variable. The example file is **config.example.json** – copy it to **config.json** and edit.
 
-{% hint style="info" %}
-#### Navigate to the Correct Folder
+## Must-set
 
-Ensure you are in the `VoiceSentinel/processor-voicesentinel` directory before proceeding.
-{% endhint %}
+**server** – How the processor listens and how the plugin authenticates.
 
-To copy `config.example.json` to `config.json`, run the following command:
+| Key | Example | Description |
+|-----|---------|--------------|
+| **host** | `"0.0.0.0"` | Bind address. Use `0.0.0.0` to accept connections from other machines. |
+| **port** | `28472` | Port for HTTP and WebSocket. Plugin uses this in **processor_websocket_url** (e.g. `ws://host:28472`). |
+| **server_key** | `"YourSecretKey16CharsMin"` | Shared secret. Must match the plugin’s **server_key** in config.yml. 16–256 letters/numbers. Leave empty to accept any key (not recommended). |
 
+## Transcription
+
+**transcription** – Model and how long to wait.
+
+| Key | Typical | Description |
+|-----|---------|-------------|
+| **model** | `"Systran/faster-whisper-base"` | Whisper model. `base` is faster/smaller, `small`/`medium`/`large-v2`/`large-v3` are heavier but more accurate. |
+| **language** | `"auto"` | `"auto"` for auto-detect, or e.g. `"en"` to force English. |
+| **device** | `"cpu"` | `"cpu"` or `"cuda"` if you have a GPU. |
+| **compute_type** | `"int8"` | `int8` is common for CPU. |
+| **timeout_seconds** | `30` | Max time per transcription; after that the job is dropped. |
+| **cpu_threads** | `2` | Worker threads. Increase on beefy machines. |
+
+## Audio limits
+
+**audio** – What the processor accepts.
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| **min_audio_length_ms** | `50` | Chunks shorter than this are skipped. |
+| **max_audio_length_ms** | `30000` | Chunks longer than 30 seconds are rejected. |
+| **sample_rate** | `16000` | Expected sample rate. |
+| **channels** | `1` | Mono. |
+
+## Processing queue
+
+**processing** – Backpressure.
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| **queue_max_size** | `500` | Max jobs waiting. When full, new recordings are dropped and the plugin gets an empty transcript. |
+
+Increase this if you have bursts of traffic; you can also check **/stats** for **processing_queue_size**.
+
+## Recordings (optional)
+
+**recordings** – Saving WAVs (e.g. for moderation or compliance).
+
+| Key | Example | Description |
+|-----|---------|-------------|
+| **save_mode** | `"none"` | `"none"` = don’t save. `"all"` = save everything. `"flagged"` = only when something is flagged. |
+| **save_path** | `"recordings/"` | Directory for WAV + metadata files. |
+| **retention_days** | `7` | Delete files older than this. |
+
+Check your local laws and privacy policy before saving voice. Prefer `"none"` or `"flagged"` if you’re not sure.
+
+## CORS
+
+**cors** – Only matters if you call the HTTP endpoints (e.g. /health, /stats) from a browser. Typical:
+
+```json
+"cors": {
+  "allow_origins": ["*"],
+  "allow_credentials": true,
+  "allow_methods": ["*"],
+  "allow_headers": ["*"]
+}
 ```
-cp config.example.json config.json
-```
 
-**Configuration Example (Pre-installed)**
+Tighten **allow_origins** if you have a known front-end URL.
+
+## LLM profanity (optional)
+
+**llm_profanity** – Optional second pass: when no word-list match is found, an LLM can still flag the transcript. Disabled by default.
+
+| Key | Example | Description |
+|-----|---------|-------------|
+| **enabled** | `false` | Turn on to use the LLM. |
+| **provider** | `"ollama"` | `"openai"`, `"anthropic"`, or `"ollama"`. |
+| **api_key** | `"http://localhost:11434"` | API key for OpenAI/Anthropic, or Ollama base URL. |
+| **model** | `"llama2"` | Model name. For Ollama, use a model you’ve pulled. |
+| **timeout_seconds** | `15` | Request timeout. |
+| **confidence_threshold** | `0.7` | How confident the LLM must be to flag. |
+| **strictness** | `"medium"` | `"strict"`, `"medium"`, or `"lenient"`. |
+
+## Console
+
+**console** – Logging and live stats.
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| **log_transcripts** | `false` | Log every transcript to the console. |
+| **live_display** | `true` | Periodic live-updating status in the console. |
+
+<details>
+<summary>Minimal config example</summary>
 
 ```json
 {
   "server": {
     "host": "0.0.0.0",
-    "port": 8000,
-    "workers": 4,
-    "cors": {
-      "allow_origins": ["<your-transcriber-url>"],
-      "allow_credentials": true,
-      "allow_methods": ["GET", "POST", "DELETE"],
-      "allow_headers": [
-        "Content-Type", 
-        "Authorization", 
-        "Accept",
-        "User-Agent",
-        "X-Requested-With"
-      ]
-    }
-  },
-  "security": {
-    "api_keys": [],
-    "rate_limit": {
-      "authenticated": {
-        "window_seconds": 60,
-        "max_requests": 1000,
-        "block_duration_seconds": 300
-      },
-      "unauthenticated": {
-        "window_seconds": 60,
-        "max_requests": 10,
-        "block_duration_seconds": 1800
-      }
-    }
+    "port": 28472,
+    "server_key": "YourSharedSecretKey16CharsMin"
   },
   "transcription": {
-    "engine": "whisper",
-    "model": "tiny.en",
-    "language": "en",
-    "timeout_seconds": 90,
-    "cpu_threads": 1,
-    "options": {
-      "fp16": false,
-      "temperature": 0.0,
-      "condition_on_previous_text": false,
-      "no_speech_threshold": 0.7,
-      "beam_size": 1,
-      "best_of": 1,
-      "suppress_blank": true,
-      "initial_prompt": "Player voice chat audio containing speech."
-    }
-  },
-  "processing": {
-    "max_concurrent_jobs": 4, 
-    "queue_warning_threshold": 200,
-    "max_queue_size": 1000,
-    "timeout_seconds": 90,
-    "retry_attempts": 2,
-    "retry_delay_seconds": 1
+    "model": "Systran/faster-whisper-base",
+    "language": "auto",
+    "device": "cpu",
+    "compute_type": "int8",
+    "timeout_seconds": 30
   },
   "audio": {
-    "max_chunk_size": 262144,
-    "max_total_size": 5242880,
-    "sample_rate": 16000,
-    "channels": 1,
-    "min_length_ms": 300,
-    "max_length_ms": 15000
+    "min_audio_length_ms": 50,
+    "max_audio_length_ms": 30000
+  },
+  "processing": {
+    "queue_max_size": 500
+  },
+  "recordings": {
+    "save_mode": "none",
+    "save_path": "recordings/",
+    "retention_days": 7
   }
-} 
+}
 ```
 
-The configuration is pretty self explanatory, what you should pay attention to:
-
-* `max_concurrent_jobs`: Sets the maximum number of jobs that can run at the same time.
-* `max_queue_size`: Determines the largest number of jobs that can be queued for processing.
-* `cpu_threads`: Configures the number of CPU threads available for processing tasks. You shouldn't need much, it depends on your playerbase.
-* `cors`: Enables Cross-Origin Resource Sharing (CORS) settings. See [Securing your processor](securing-your-processor.md).
-* `workers`: Specifies the number of worker processes handling tasks. Increase threads = Add workers.
-
-### Setting your server key(s)
-
-{% hint style="info" %}
-For generating keys, I recommend using [jwtsecrets.com](https://jwtsecrets.com/).
-{% endhint %}
-
-#### Editing the config.json (processor
-
-Place your server key into the array like this:
-
-```json
-  "security": {
-    "api_keys": ["your-generated-key-here"],
-```
-
-#### Editing the config.yml (plugin)
-
-```yaml
-# Unique server key for authentication (must be 16+ characters)
-# SECURITY: Change this to a strong, unique value for your server!
-# Use a password generator to create a secure key
-server_key: "your-generated-key-here"
-```
+Set **server_key** to the same value you put in the plugin’s config.yml. Everything else has defaults in code if you omit it.
+</details>

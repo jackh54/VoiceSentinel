@@ -1,79 +1,75 @@
----
-description: >-
-  This page goes over: setting up SSL using a reverse proxy, and proper cors
-  configuration
----
-
 # Securing your processor
 
-### NGINX Reverse Proxy with SSL
+The processor speaks HTTP (for /health, /stats) and WebSocket (for the plugin). For production you should put it behind a reverse proxy with HTTPS so the plugin connects with **wss://** and traffic is encrypted.
 
-```bash
-sudo nano /etc/nginx/sites-available/<your-transcriber-url>
-```
+## Nginx reverse proxy with SSL
 
-Here is a sample NGINX configuration for a reverse proxy, be sure to replace \<yourdomain> and \<yourip>.
+Example: processor runs on the same machine as Nginx, listening on 28472. Nginx handles HTTPS and forwards to it.
+
+Create a site config (e.g. `/etc/nginx/sites-available/voicesentinel-processor`):
 
 ```nginx
 server {
     listen 80;
-    server_name <yourdomain>;
-
-    # Redirect all HTTP requests to HTTPS
+    server_name processor.yourdomain.com;
     return 301 https://$host$request_uri;
 }
 
 server {
     listen 443 ssl;
-    server_name <yourdomain>;
+    server_name processor.yourdomain.com;
 
-    # Path to your SSL certificate and key
-    ssl_certificate /etc/letsencrypt/live/<yourdomain>/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/<yourdomain>/privkey.pem;
-
-    # SSL settings
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_certificate     /etc/letsencrypt/live/processor.yourdomain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/processor.yourdomain.com/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
     ssl_prefer_server_ciphers on;
 
-    # Proxy settings
     location / {
-        proxy_pass http://<yourip>:8000/;
+        proxy_pass http://127.0.0.1:28472;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 }
-
-
 ```
 
-### Symlink the file
+The **Upgrade** and **Connection** headers are required for WebSocket. Without them the plugin’s WebSocket connection will fail.
+
+Enable the site, test, reload Nginx:
 
 ```bash
-sudo ln -s /etc/nginx/sites-available/<your-transcriber-url> /etc/nginx/sites-enabled/
+sudo ln -s /etc/nginx/sites-available/voicesentinel-processor /etc/nginx/sites-enabled/
+nginx -t
+sudo systemctl reload nginx
 ```
 
-### Cors Configuration
+Then in the plugin set:
 
-VoiceSentinel includes all necessary methods and headers in the `config.example.json` file. Simply add your transcriber URL!&#x20;
-
-{% hint style="warning" %}
-Make sure to include http/https.
-{% endhint %}
-
-```json
-"cors": {
-  "allow_origins": ["<your-transcriber-url>"],
-  "allow_credentials": true,
-  "allow_methods": ["GET", "POST", "DELETE"],
-  "allow_headers": [
-    "Content-Type", 
-    "Authorization", 
-    "Accept",
-    "User-Agent",
-    "X-Requested-With"
-  ]
-}
+```yaml
+processor_websocket_url: "wss://processor.yourdomain.com"
 ```
+
+No port if you’re using 443. **server_key** stays the same in both plugin and processor config.
+
+## SSL with Certbot
+
+Get a certificate first (stop anything on port 80 if needed):
+
+```bash
+certbot certonly --standalone -d processor.yourdomain.com
+```
+
+Then point the Nginx config at the paths Certbot gives you (usually under `/etc/letsencrypt/live/...`). See [Certbot](certbot.md) for more.
+
+## CORS
+
+If you only use the processor from the Minecraft plugin (no browser calls to your processor URL), CORS is less critical. The default in config allows all origins. If you build a web dashboard that calls **/health** or **/stats** from a browser, set **cors.allow_origins** to your front-end URL (e.g. `["https://dashboard.yourdomain.com"]`) instead of `["*"]`.
+
+## Firewall
+
+Only expose 80/443 on the public interface. Let the processor listen on 127.0.0.1:28472 or a private IP so only Nginx can reach it.
