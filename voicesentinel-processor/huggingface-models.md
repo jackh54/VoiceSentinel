@@ -4,7 +4,31 @@ description: Choose the right faster-whisper model and how much RAM to allocate 
 
 # Hugging Face models and sizing
 
-The processor uses **faster-whisper** (Systran) models from Hugging Face for speech-to-text. You pick one model in **transcription.model** in `config.json`. Smaller models use less RAM and are faster but less accurate; larger models need more resources and handle accents/noise better.
+The processor uses **faster-whisper**-compatible models from Hugging Face for speech-to-text. You pick one model in **transcription.model** in `config.json`. The table below lists common Systran models as a starting point – you don’t have to use only those. You can browse [Hugging Face models tagged for faster-whisper](https://huggingface.co/models?other=faster-whisper) (or the [Systran organization](https://huggingface.co/Systran)) and set **transcription.model** to any model ID that works with faster-whisper (e.g. `Systran/faster-whisper-base` or another repo). Smaller models use less RAM and are faster but less accurate; larger models need more resources and handle accents/noise better.
+
+## Hugging Face token (faster downloads)
+
+The first time you run a model, the processor downloads it from Hugging Face. Unauthenticated downloads are rate-limited and can be slow. Adding a **Hugging Face access token** gives you higher limits and faster downloads.
+
+**How to get a token:**
+
+1. Sign up or log in at [huggingface.co](https://huggingface.co/join).
+2. Open **Settings** (profile menu → Settings).
+3. Go to **Access Tokens** ([direct link](https://huggingface.co/settings/tokens)).
+4. Click **New token**, name it (e.g. `voicesentinel-processor`), choose **Read** (no need for write).
+5. Copy the token (starts with `hf_`).
+
+**Use it in the processor:**  
+Put the token in `config.json` under **transcription** as **huggingface_token**:
+
+```json
+"transcription": {
+  "model": "Systran/faster-whisper-base",
+  "huggingface_token": "hf_YourTokenHere"
+}
+```
+
+Leave **huggingface_token** out or set it to `""` if you don’t use a token; downloads will still work but may be slower. Don’t share or commit your token.
 
 ## Model comparison
 
@@ -50,4 +74,4 @@ With a **GPU** (`device: "cuda"`), the same model uses less CPU and can handle m
 - **Max accuracy, powerful box** – **large-v3** with 16 GB RAM or a GPU with 4+ GB VRAM.
 - **Limited RAM (e.g. 2 GB)** – **tiny** or **base**; expect lower accuracy on noisy or non-English audio.
 
-Set the model in [Configuration](configuration.md) under **transcription.model** (e.g. `Systran/faster-whisper-base`). Restart the processor after changing it; the first run will download the model from Hugging Face if needed.
+Set the model in [Configuration](configuration.md) under **transcription.model** (e.g. `Systran/faster-whisper-base`). You can use any faster-whisper-compatible model from [Hugging Face](https://huggingface.co/models?other=faster-whisper) – just use its repo ID (e.g. `org/model-name`). Restart the processor after changing it; the first run will download the model from Hugging Face (faster if you set **huggingface_token** above).
