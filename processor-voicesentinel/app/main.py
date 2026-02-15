@@ -341,7 +341,7 @@ class WebSocketManager:
                 "mute_words": mute_flagged_words,
                 "player": actual_player_name,
                 "session_id": actual_session_id,
-                "processing_time_ms": processing_time_ms,
+                "processing_time_ms": max(0, processing_time_ms),
                 "detected_language": detected_language
             }
             
