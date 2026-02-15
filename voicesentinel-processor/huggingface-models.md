@@ -47,20 +47,20 @@ RAM/VRAM are approximate; actual use depends on `cpu_threads`, queue depth, and 
 
 ## Sizing: allocation and capacity
 
-Use this as a starting point. “Concurrent speakers” = how many people can be talking at once and still get transcripts without the queue backing up. “Typical server size” = rough player count if only a few talk at once; bursty voice = plan for higher concurrency.
+The chart below is for **specific specs**: the “Allocate RAM” value for that row **plus** a **moderate CPU** (e.g. 4 cores / 4–8 threads, as set in **transcription.cpu_threads**). Concurrent capacity is limited by CPU throughput, not just RAM – so with more cores/threads you can handle **more** people talking at once than the table shows. Use the table as a baseline for that spec.
 
-| Model | Allocate RAM (CPU) | Rough concurrent speakers | Typical server size (players) |
-|-------|--------------------|---------------------------|-------------------------------|
-| **tiny** | 2 GB | 4–6 | Small (10–20) |
-| **base** | 4 GB | 3–5 | Small–medium (20–40) |
-| **small** | 6 GB | 2–4 | Medium (40–80) |
-| **medium** | 8 GB | 1–3 | Medium–large (60–100) |
-| **large-v2** | 12 GB | 1–2 | Large (80–150) |
+| Model | Allocate RAM (CPU) | Concurrent speakers (4–8 threads) | Typical server size (players) |
+|-------|--------------------|-----------------------------------|-------------------------------|
+| **tiny** | 2 GB | 4–8 | Small (10–20) |
+| **base** | 4 GB | 3–6 | Small–medium (20–50) |
+| **small** | 6 GB | 2–5 | Medium (40–80) |
+| **medium** | 8 GB | 2–4 | Medium–large (60–100) |
+| **large-v2** | 12 GB | 1–3 | Large (80–150) |
 | **large-v3** | 16 GB | 1–2 | Large (80–150) |
 
-- **Allocate RAM** = recommended minimum for the processor (including model + queue + overhead). On shared hosts, give the processor at least this much.
-- **Concurrent speakers** = approximate. If many players talk at once, use a smaller model or more RAM/CPU, or increase **processing.queue_max_size** and accept some delay.
-- **Typical server size** = ballpark. Assumes “a few people talking at a time.” If your server has 50 people all in voice at once, aim for the concurrent-speakers column and possibly a smaller/faster model.
+- **Allocate RAM** = recommended minimum for the processor (model + queue + overhead) for that model.
+- **Concurrent speakers** = how many people talking at once the processor can keep up with **at that RAM and ~4–8 CPU threads**. More threads = higher concurrency; fewer threads = lower. Scale up **cpu_threads** (and RAM if needed) for more simultaneous voice.
+- **Typical server size** = rough total players when only a subset are in voice at once. If everyone is in voice and talking a lot, size by the concurrent-speakers column instead (or use a smaller/faster model / more CPU).
 
 {% hint style="info" %}
 With a **GPU** (`device: "cuda"`), the same model uses less CPU and can handle more concurrent jobs. You can often use **large-v2** or **large-v3** at 4–6 GB VRAM and allocate less RAM to the server.
