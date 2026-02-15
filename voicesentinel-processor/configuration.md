@@ -77,7 +77,7 @@ Check your local laws and privacy policy before saving voice. Prefer `"none"` or
 
 Tighten **allow_origins** if you have a known front-end URL.
 
-## LLM profanity (optional)
+## LLM profanity (optional & beta)
 
 **llm_profanity** – Optional second pass: when no word-list match is found, an LLM can still flag the transcript. Disabled by default.
 
