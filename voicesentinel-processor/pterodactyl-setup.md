@@ -35,6 +35,8 @@ So: one-time install gives you a working tree; every restart pulls the latest co
 
 The egg’s startup command does not use **cd /mnt/server** or any path like **voicesentinel/processor-voicesentinel**. It runs in whatever directory the panel uses as the server root (often the container home). If you ever see “No such file or directory” for a path, you’re likely using an old or edited startup – replace it with the one from the current egg so it matches.
 
+**Already running an older egg?** See [Updating the egg](updating-the-egg.md) to update the egg, reinstall the server, and switch to the new startup command.
+
 ## Port and connection
 
 The panel assigns a port (e.g. 28472 or something else). In the plugin set **processor_websocket_url** to that host and port, e.g. `ws://processor.yourdomain.com:28472`, and use the same **server_key** in both configs.

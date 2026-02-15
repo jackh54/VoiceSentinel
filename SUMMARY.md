@@ -24,4 +24,5 @@
 * [Securing your processor](voicesentinel-processor/securing-your-processor.md)
 * [Certbot](voicesentinel-processor/certbot.md)
 * [Pterodactyl Setup](voicesentinel-processor/pterodactyl-setup.md)
+* [Updating the egg](voicesentinel-processor/updating-the-egg.md)
 * [Troubleshooting (processor)](voicesentinel-processor/troubleshooting.md)
