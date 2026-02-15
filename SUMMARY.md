@@ -19,6 +19,7 @@
 
 * [Installation](voicesentinel-processor/installation.md)
 * [Configuration](voicesentinel-processor/configuration.md)
+* [Hugging Face models and sizing](voicesentinel-processor/huggingface-models.md)
 * [Running the processor](voicesentinel-processor/running-the-processor.md)
 * [Securing your processor](voicesentinel-processor/securing-your-processor.md)
 * [Certbot](voicesentinel-processor/certbot.md)
