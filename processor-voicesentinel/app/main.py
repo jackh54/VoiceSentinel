@@ -49,6 +49,13 @@ def load_config():
     except FileNotFoundError:
         default_config = get_default_config()
         validate_config(default_config)
+        try:
+            Path(config_path).parent.mkdir(parents=True, exist_ok=True)
+            with open(config_path, 'w') as f:
+                json.dump(default_config, f, indent=2)
+            logger.info(f"Created default config at {config_path}")
+        except OSError as e:
+            logger.warning(f"Could not write default config to {config_path}: {e}")
         return default_config
     except json.JSONDecodeError as e:
         logger.error(f"Invalid JSON in config file: {e}")
@@ -83,12 +90,25 @@ def get_default_config():
             "save_path": "recordings/",
             "retention_days": 7
         },
+        "response": {"include_audio": False},
         "cors": {
             "allow_origins": ["*"],
             "allow_credentials": True,
             "allow_methods": ["*"],
             "allow_headers": ["*"]
-        }
+        },
+        "llm_profanity": {
+            "enabled": False,
+            "provider": "ollama",
+            "api_key": "http://localhost:11434",
+            "model": "llama2",
+            "timeout_seconds": 15,
+            "confidence_threshold": 0.7,
+            "strictness": "medium",
+            "max_concurrent_requests": 3,
+            "fallback_on_error": True
+        },
+        "console": {"log_transcripts": False, "live_display": True}
     }
 
 class WebSocketManager:
