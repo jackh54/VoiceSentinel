@@ -32,7 +32,7 @@ logging.getLogger("huggingface_hub.file_download").setLevel(logging.INFO)
 
 logger = logging.getLogger(__name__)
 
-VERSION = "3.0.0"
+VERSION = "3.1.0"
 
 def load_config():
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -344,11 +344,15 @@ class WebSocketManager:
                 "processing_time_ms": max(0, processing_time_ms),
                 "detected_language": detected_language
             }
-            
+
             if llm_flagged:
                 response_data["llm_flagged"] = True
                 response_data["llm_confidence"] = llm_confidence
                 response_data["llm_reason"] = llm_reason
+
+            if (is_profane or should_mute) and self.config.get("response", {}).get("include_audio", False):
+                import base64
+                response_data["audio_data"] = base64.b64encode(audio_data).decode("utf-8")
             
             await self.send_message(client_id, response_data)
             self.console_status.increment_processed()

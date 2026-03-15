@@ -28,6 +28,10 @@
   "processing": {
     "queue_max_size": 500
   },
+  "response": {
+    "include_audio": false,
+    "_comment": "When true, flagged transcript responses include audio_data (base64 WAV) for Discord webhook attachments"
+  },
   "cors": {
     "allow_origins": ["*"],
     "allow_credentials": true,
