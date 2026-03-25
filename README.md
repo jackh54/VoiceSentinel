@@ -161,9 +161,9 @@ See LICENSE file for details.
 - Recording save functionality
 - Simplified configuration
 - Improved performance
+- Audio clip attachments for Discord webhooks
 
 ### Future Plans
-- Audio clip attachments for Discord webhooks
 - Web dashboard
 - Player reputation system
 - Microservices architecture for scalability
