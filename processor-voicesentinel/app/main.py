@@ -51,8 +51,8 @@ def license_from_auth_payload(data: dict) -> tuple[str, str]:
             lic_b64 = str(lic_b64)
         try:
             license_plain = base64.b64decode(lic_b64).decode("utf-8").strip()
-        except Exception as e:
-            logger.warning("license_key_b64 decode failed: %s", e)
+        except Exception:
+            pass
     fingerprint = ""
     if license_plain:
         fingerprint = hashlib.sha256(license_plain.encode("utf-8")).hexdigest()
@@ -593,13 +593,6 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                 if not config_key or server_key == config_key:
                     authenticated = True
                     ws_manager.set_client_license(client_id, fingerprint, license_plain)
-                    if config.get("pool_server"):
-                        logger.info(
-                            "pool audit: auth_success client_id=%s license_key=%s license_fingerprint_sha256=%s",
-                            client_id,
-                            license_plain or "(none)",
-                            fingerprint or "(none)",
-                        )
                     pool_audit_emit(
                         config,
                         "auth_success",
