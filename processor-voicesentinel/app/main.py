@@ -555,7 +555,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                         else:
                             logger.warning(
                                 "pool audit: auth_success client_id=%s with empty license fingerprint — "
-                                "auth JSON had no usable license_key_b64 (plugin must send base64 UTF-8 license key)",
+                                "auth JSON had no usable",
                                 client_id,
                             )
                     pool_audit_emit(
