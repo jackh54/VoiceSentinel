@@ -13,6 +13,7 @@ class ConfigValidator:
     def validate(self, config: Dict[str, Any]) -> Tuple[bool, List[str], List[str]]:
         self.errors = []
         self._validate_server(config)
+        self._validate_pool_server(config)
         self._validate_transcription(config)
         self._validate_audio(config)
         self._validate_processing(config)
@@ -26,7 +27,17 @@ class ConfigValidator:
         port = server.get("port", 28472)
         if not isinstance(port, int) or port < 1 or port > 65535:
             self.errors.append(f"Invalid port: {port}")
-    
+
+    def _validate_pool_server(self, config: Dict[str, Any]):
+        if "pool_server" not in config:
+            return
+        ps = config.get("pool_server")
+        if not isinstance(ps, bool):
+            self.errors.append(f"pool_server must be a boolean, got: {type(ps).__name__}")
+        log_path = config.get("pool_server_audit_log")
+        if log_path is not None and not isinstance(log_path, str):
+            self.errors.append(f"pool_server_audit_log must be a string, got: {type(log_path).__name__}")
+
     def _validate_transcription(self, config: Dict[str, Any]):
         transcription = config.get("transcription", {})
         if not transcription:

@@ -1,4 +1,7 @@
 {
+  "pool_server": false,
+  "pool_server_audit_log": "logs/pooled_server_audit.jsonl",
+  "_pool_server_comment": "When true: JSONL audit log for investigations (license fingerprint, events). Does not register this host in any public directory.",
   "server": {
     "host": "0.0.0.0",
     "port": 28472,

@@ -5,6 +5,8 @@ import json
 import logging
 import asyncio
 import time
+import base64
+import hashlib
 from datetime import datetime
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -17,6 +19,7 @@ from app.profanity import ProfanityFilter
 from app.config_validator import validate_config, ConfigValidationError
 from app.llm_profanity import LLMProfanityDetector
 from app.console_status import ConsoleStatus
+from app.pool_audit import setup_pool_audit, pool_audit_emit
 
 import sys
 
@@ -32,7 +35,7 @@ logging.getLogger("huggingface_hub.file_download").setLevel(logging.INFO)
 
 logger = logging.getLogger(__name__)
 
-VERSION = "3.1.0"
+VERSION = "3.2.0"
 
 def load_config():
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -108,12 +111,15 @@ def get_default_config():
             "max_concurrent_requests": 3,
             "fallback_on_error": True
         },
-        "console": {"log_transcripts": False, "live_display": True}
+        "console": {"log_transcripts": False, "live_display": True},
+        "pool_server": False,
+        "pool_server_audit_log": "logs/pooled_server_audit.jsonl"
     }
 
 class WebSocketManager:
     def __init__(self):
         self.active_connections = {}
+        self._license_fingerprints = {}
         self.transcriber = None
         self.llm_detector = None
         self.config = {}
@@ -150,8 +156,18 @@ class WebSocketManager:
     async def connect(self, websocket: WebSocket, client_id: str):
         await websocket.accept()
         self.active_connections[client_id] = websocket
-    
-    def disconnect(self, client_id: str):
+
+    def set_client_license_fingerprint(self, client_id: str, fingerprint: str) -> None:
+        self._license_fingerprints[client_id] = fingerprint or ""
+
+    def get_license_fingerprint(self, client_id: str) -> str:
+        return self._license_fingerprints.get(client_id, "")
+
+    def disconnect(self, client_id: str, skip_pool_disconnect_audit: bool = False) -> None:
+        if self.config.get("pool_server") and not skip_pool_disconnect_audit:
+            fp = self.get_license_fingerprint(client_id)
+            pool_audit_emit(self.config, "disconnect", client_id, fp)
+        self._license_fingerprints.pop(client_id, None)
         self.active_connections.pop(client_id, None)
         self.audio_buffers.pop(client_id, None)
         self.buffer_metadata.pop(client_id, None)
@@ -222,6 +238,15 @@ class WebSocketManager:
                 self._processing_queue.put_nowait(job)
             except asyncio.QueueFull:
                 logger.warning(f"Processing queue full, dropping recording for client {client_id}")
+                fp = self.get_license_fingerprint(client_id)
+                pool_audit_emit(
+                    self.config,
+                    "queue_drop",
+                    client_id,
+                    fp,
+                    player=player_name,
+                    session_id=session_id or client_id,
+                )
                 await self.send_message(client_id, {
                     "type": "final_transcript",
                     "transcript": "",
@@ -376,6 +401,19 @@ class WebSocketManager:
             
             await self.send_message(client_id, response_data)
             self.console_status.increment_processed()
+            if self.config.get("pool_server") and (is_profane or should_mute):
+                fp = self.get_license_fingerprint(client_id)
+                pool_audit_emit(
+                    self.config,
+                    "transcription_flagged",
+                    client_id,
+                    fp,
+                    player=actual_player_name,
+                    session_id=actual_session_id,
+                    profanity_hits=len(profanity_flagged_words),
+                    mute_hits=len(mute_flagged_words),
+                    llm_flagged=bool(llm_flagged),
+                )
             await self._save_recording(audio_data, actual_player_name, is_profane, transcript or "")
             
         except asyncio.TimeoutError:
@@ -418,6 +456,10 @@ async def console_update_task():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    setup_pool_audit(
+        bool(config.get("pool_server", False)),
+        config.get("pool_server_audit_log", "logs/pooled_server_audit.jsonl"),
+    )
     await ws_manager.initialize(config)
     if ws_manager.console_status:
         ws_manager.console_status.print_status(force=True)
@@ -456,10 +498,18 @@ async def health_check():
 @app.get("/stats")
 async def get_stats():
     qsize = ws_manager._processing_queue.qsize() if ws_manager._processing_queue else 0
+    queue_max = config.get("processing", {}).get("queue_max_size", 500)
+    try:
+        queue_max = max(1, int(queue_max))
+    except (TypeError, ValueError):
+        queue_max = 500
+    queue_utilization = round(100.0 * min(qsize, queue_max) / queue_max, 2)
     return {
         "active_connections": len(ws_manager.active_connections),
         "transcriber_ready": ws_manager.transcriber is not None,
-        "processing_queue_size": qsize
+        "processing_queue_size": qsize,
+        "queue_max_size": queue_max,
+        "queue_utilization_percent": queue_utilization,
     }
 
 @app.websocket("/ws/{client_id}")
@@ -475,13 +525,46 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
             if message_type == "auth":
                 server_key = data.get("server_key", "")
                 config_key = config.get("server", {}).get("server_key", "")
-                
+
+                fingerprint = ""
+                lic_b64 = data.get("license_key_b64") or ""
+                if lic_b64:
+                    try:
+                        raw_lic = base64.b64decode(lic_b64).decode("utf-8")
+                        fingerprint = hashlib.sha256(raw_lic.strip().encode("utf-8")).hexdigest()
+                    except Exception:
+                        fingerprint = ""
+
+                remote_ip = ""
+                try:
+                    if websocket.client and websocket.client.host:
+                        remote_ip = websocket.client.host
+                except Exception:
+                    remote_ip = ""
+
                 if not config_key or server_key == config_key:
                     authenticated = True
+                    ws_manager.set_client_license_fingerprint(client_id, fingerprint)
+                    pool_audit_emit(
+                        config,
+                        "auth_success",
+                        client_id,
+                        fingerprint,
+                        remote_ip=remote_ip,
+                    )
                     await ws_manager.send_message(client_id, {"type": "auth_success"})
                 else:
+                    pool_audit_emit(
+                        config,
+                        "auth_failed",
+                        client_id,
+                        fingerprint,
+                        remote_ip=remote_ip,
+                        reason="invalid_server_key",
+                    )
                     await ws_manager.send_message(client_id, {"type": "auth_failed", "reason": "Invalid server key"})
                     await websocket.close()
+                    ws_manager.disconnect(client_id, skip_pool_disconnect_audit=True)
                     return
                     
             elif message_type == "audio_chunk" and authenticated:
