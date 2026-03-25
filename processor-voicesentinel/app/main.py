@@ -545,6 +545,19 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                 if not config_key or server_key == config_key:
                     authenticated = True
                     ws_manager.set_client_license_fingerprint(client_id, fingerprint)
+                    if config.get("pool_server"):
+                        if fingerprint:
+                            logger.info(
+                                "pool audit: auth_success client_id=%s license_fingerprint_sha256=%s",
+                                client_id,
+                                fingerprint,
+                            )
+                        else:
+                            logger.warning(
+                                "pool audit: auth_success client_id=%s with empty license fingerprint — "
+                                "auth JSON had no usable license_key_b64 (plugin must send base64 UTF-8 license key)",
+                                client_id,
+                            )
                     pool_audit_emit(
                         config,
                         "auth_success",
