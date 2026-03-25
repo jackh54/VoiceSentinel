@@ -37,6 +37,9 @@ class ConfigValidator:
         log_path = config.get("pool_server_audit_log")
         if log_path is not None and not isinstance(log_path, str):
             self.errors.append(f"pool_server_audit_log must be a string, got: {type(log_path).__name__}")
+        tx_dir = config.get("pool_server_transcripts_dir")
+        if tx_dir is not None and not isinstance(tx_dir, str):
+            self.errors.append(f"pool_server_transcripts_dir must be a string, got: {type(tx_dir).__name__}")
 
     def _validate_transcription(self, config: Dict[str, Any]):
         transcription = config.get("transcription", {})

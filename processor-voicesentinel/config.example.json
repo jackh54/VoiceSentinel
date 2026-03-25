@@ -1,6 +1,7 @@
 {
   "pool_server": false,
   "pool_server_audit_log": "logs/pooled_server_audit.jsonl",
+  "pool_server_transcripts_dir": "logs/pool_transcripts_by_license",
   "server": {
     "host": "0.0.0.0",
     "port": 28472,
