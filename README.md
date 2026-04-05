@@ -8,5 +8,6 @@ Start here:
 
 * **Plugin (Paper / Folia):** [Installation](voicesentinel-plugin/installation.md)
 * **Processor (Docker / bare metal):** [Installation](voicesentinel-processor/installation.md)
+* **Legal:** [**https://www.pandascript.dev/voicesentinel**](https://www.pandascript.dev/voicesentinel)
 
 Use the sidebar for the full table of contents.
