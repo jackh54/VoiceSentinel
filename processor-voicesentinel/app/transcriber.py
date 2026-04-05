@@ -82,7 +82,8 @@ class FasterWhisperTranscriber:
                     temperature=0.0,
                     vad_filter=True
                 )
-                transcript = " ".join([seg.text.strip() for seg in segments]).strip()
+                # One line per Whisper segment so the plugin buffer (and report books) can paginate each phrase.
+                transcript = "\n".join(seg.text.strip() for seg in segments if seg.text and seg.text.strip()).strip()
                 detected_language = info.language if hasattr(info, 'language') else "unknown"
                 return transcript, detected_language
             

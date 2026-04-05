@@ -29,6 +29,12 @@ VoiceSentinel is a real-time voice moderation system for Minecraft servers using
 - Folia & Paper compatibility
 - Simple Voice Chat integration
 
+### Voice reports (plugin v2.2.1+)
+- In-memory rolling transcript buffer per player (all final transcripts, not only flagged lines).
+- `/reportvoice <player> [minutes]` (or a chest GUI when `voice_report.interface` is `gui`) notifies staff with `voicesentinel.report.review`. Staff see a compact chat line with a clickable **Open book** action (and the same command printed: `/viewreport <player> <minutes>` matching the report window).
+- `/viewreport <player> [minutes]` opens a **written book** with the local buffer plus optional processor evidence—the same payload as the report, formatted for reading. Optional `voice_report.staff_chat_full_transcript: true` restores dumping the full plain text in chat for staff who want it.
+- Optional processor retention: enable `report_buffer.enabled` on the processor (if it is off, `GET /report/evidence` returns **404** with a hint in the JSON body). Call `GET /report/evidence?player=<name>&seconds=<n>` with `X-License-Key` (same as the plugin) and **`X-Server-Key`** matching WebSocket auth (the plugin sends the **public pool key** in PUBLIC mode and `server_key` from `config.yml` in CUSTOM mode). Stored transcripts live under `report_buffer/<license_sha256>/<server_key_sha256>/` so **different licenses never share data**. **Different Minecraft servers with the same license** are isolated only if they use **different** `server_key` values (typical for self-hosted); on a **public pool** everyone shares the same pool `server_key`, so the second path segment is identical for all pool users under that license (still isolated from other licenses). Use HTTPS in front of public or shared processors.
+
 ## Requirements
 
 ### Server Requirements
@@ -135,6 +141,7 @@ For security vulnerabilities, see SECURITY.md.
 ### Endpoints
 - `/health` - Health check
 - `/stats` - System statistics
+- `/report/evidence` - License-scoped transcript evidence (requires `report_buffer.enabled`; authenticate with `X-License-Key`, optional `X-Server-Key` when configured)
 
 ## License
 

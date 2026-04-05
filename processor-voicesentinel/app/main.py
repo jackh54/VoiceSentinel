@@ -12,7 +12,7 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from app.transcriber import create_transcriber
 from app.profanity import ProfanityFilter
@@ -20,6 +20,13 @@ from app.config_validator import validate_config, ConfigValidationError
 from app.llm_profanity import LLMProfanityDetector
 from app.console_status import ConsoleStatus
 from app.pool_audit import setup_pool_audit, pool_audit_emit, pool_transcript_append
+from app.report_buffer import (
+    report_buffer_append_async,
+    query_report_evidence,
+    query_report_audio,
+    sanitize_player_query,
+    check_evidence_rate_limits,
+)
 
 import sys
 
@@ -35,7 +42,7 @@ logging.getLogger("huggingface_hub.file_download").setLevel(logging.INFO)
 
 logger = logging.getLogger(__name__)
 
-VERSION = "3.2.0"
+VERSION = "3.2.1"
 
 
 def license_from_auth_payload(data: dict) -> tuple[str, str]:
@@ -137,6 +144,12 @@ def get_default_config():
         "pool_server": False,
         "pool_server_audit_log": "logs/pooled_server_audit.jsonl",
         "pool_server_transcripts_dir": "logs/pool_transcripts_by_license",
+        "report_buffer": {
+            "enabled": False,
+            "path": "report_buffer/",
+            "retention_seconds": 604800,
+            "save_audio": False,
+        },
     }
 
 class WebSocketManager:
@@ -144,6 +157,7 @@ class WebSocketManager:
         self.active_connections = {}
         self._license_fingerprints = {}
         self._license_plain = {}
+        self._auth_server_keys = {}
         self.transcriber = None
         self.llm_detector = None
         self.config = {}
@@ -185,6 +199,12 @@ class WebSocketManager:
         self._license_fingerprints[client_id] = fingerprint or ""
         self._license_plain[client_id] = license_plain or ""
 
+    def set_auth_server_key(self, client_id: str, server_key: str) -> None:
+        self._auth_server_keys[client_id] = server_key if isinstance(server_key, str) else ""
+
+    def get_auth_server_key(self, client_id: str) -> str:
+        return self._auth_server_keys.get(client_id, "")
+
     def get_license_fingerprint(self, client_id: str) -> str:
         return self._license_fingerprints.get(client_id, "")
 
@@ -198,6 +218,7 @@ class WebSocketManager:
             pool_audit_emit(self.config, "disconnect", client_id, fp, license_key=lk)
         self._license_fingerprints.pop(client_id, None)
         self._license_plain.pop(client_id, None)
+        self._auth_server_keys.pop(client_id, None)
         self.active_connections.pop(client_id, None)
         self.audio_buffers.pop(client_id, None)
         self.buffer_metadata.pop(client_id, None)
@@ -432,6 +453,21 @@ class WebSocketManager:
             
             await self.send_message(client_id, response_data)
             self.console_status.increment_processed()
+            if self.config.get("report_buffer", {}).get("enabled"):
+                fp_rb = self.get_license_fingerprint(client_id)
+                if fp_rb and (transcript or "").strip():
+                    rb_cfg = self.config.get("report_buffer") or {}
+                    rec = {
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                        "player": actual_player_name,
+                        "session_id": actual_session_id,
+                        "transcript": transcript or "",
+                        "detected_language": detected_language,
+                        "flagged": bool(is_profane or should_mute),
+                    }
+                    wav = audio_data if rb_cfg.get("save_audio") else None
+                    sk_auth = self.get_auth_server_key(client_id)
+                    await report_buffer_append_async(self.config, fp_rb, sk_auth, rec, wav)
             if self.config.get("pool_server"):
                 fp = self.get_license_fingerprint(client_id)
                 lk = self.get_license_plain(client_id)
@@ -515,6 +551,9 @@ async def lifespan(app: FastAPI):
         Path(config.get("pool_server_transcripts_dir", "logs/pool_transcripts_by_license")).mkdir(
             parents=True, exist_ok=True
         )
+    rb_path = (config.get("report_buffer") or {}).get("path", "report_buffer/")
+    if rb_path:
+        Path(rb_path).mkdir(parents=True, exist_ok=True)
     await ws_manager.initialize(config)
     if ws_manager.console_status:
         ws_manager.console_status.print_status(force=True)
@@ -549,6 +588,92 @@ app.add_middleware(
 @app.get("/health")
 async def health_check():
     return {"status": "healthy", "version": VERSION}
+
+@app.get("/report/evidence")
+async def report_evidence(
+    request: Request,
+    player: str = Query(..., min_length=1, max_length=64),
+    seconds: int = Query(300, ge=30, le=86400),
+):
+    rb = config.get("report_buffer") or {}
+    if not rb.get("enabled"):
+        raise HTTPException(
+            status_code=404,
+            detail="Report buffer disabled (set report_buffer.enabled true in processor config)",
+        )
+    license_key = request.headers.get("x-license-key") or ""
+    if not license_key:
+        auth = request.headers.get("authorization") or ""
+        if isinstance(auth, str) and auth.lower().startswith("bearer "):
+            license_key = auth[7:].strip()
+    if not license_key.strip():
+        raise HTTPException(status_code=403, detail="Missing license key")
+    fp_ev, _plain = license_from_auth_payload({"license_key": license_key.strip()})
+    if not fp_ev:
+        raise HTTPException(status_code=403, detail="Invalid license key")
+    client_ip = ""
+    try:
+        if request.client and request.client.host:
+            client_ip = request.client.host
+    except Exception:
+        client_ip = ""
+    if not await check_evidence_rate_limits(fp_ev, client_ip):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+    cfg_key = (config.get("server") or {}).get("server_key") or ""
+    sk_for_query = ""
+    if isinstance(cfg_key, str) and cfg_key.strip():
+        req_key = request.headers.get("x-server-key") or request.query_params.get("server_key") or ""
+        if req_key != cfg_key:
+            raise HTTPException(status_code=401, detail="Invalid server key")
+        sk_for_query = req_key
+    else:
+        sk_for_query = request.headers.get("x-server-key") or request.query_params.get("server_key") or ""
+    pq = sanitize_player_query(player)
+    if not pq:
+        raise HTTPException(status_code=400, detail="Invalid player parameter")
+    sec = sanitize_seconds_seconds(seconds)
+    events = query_report_evidence(config, fp_ev, sk_for_query, pq, sec)
+    return {"events": events}
+
+
+@app.get("/report/audio")
+async def report_audio(
+    request: Request,
+    player: str = Query(..., min_length=1, max_length=64),
+    session_id: str = Query(..., min_length=1, max_length=128),
+):
+    from fastapi.responses import Response as RawResponse
+
+    rb = config.get("report_buffer") or {}
+    if not rb.get("enabled") or not rb.get("save_audio"):
+        raise HTTPException(status_code=404, detail="Audio storage disabled")
+    license_key = request.headers.get("x-license-key") or ""
+    if not license_key:
+        auth = request.headers.get("authorization") or ""
+        if isinstance(auth, str) and auth.lower().startswith("bearer "):
+            license_key = auth[7:].strip()
+    if not license_key.strip():
+        raise HTTPException(status_code=403, detail="Missing license key")
+    fp_ev, _plain = license_from_auth_payload({"license_key": license_key.strip()})
+    if not fp_ev:
+        raise HTTPException(status_code=403, detail="Invalid license key")
+    client_ip = ""
+    try:
+        if request.client and request.client.host:
+            client_ip = request.client.host
+    except Exception:
+        client_ip = ""
+    if not await check_evidence_rate_limits(fp_ev, client_ip):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+    sk_for_query = request.headers.get("x-server-key") or request.query_params.get("server_key") or ""
+    pq = sanitize_player_query(player)
+    if not pq:
+        raise HTTPException(status_code=400, detail="Invalid player parameter")
+    wav = query_report_audio(config, fp_ev, sk_for_query, pq, session_id)
+    if not wav:
+        raise HTTPException(status_code=404, detail="Audio not found")
+    return RawResponse(content=wav, media_type="audio/wav")
+
 
 @app.get("/stats")
 async def get_stats():
@@ -593,6 +718,9 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                 if not config_key or server_key == config_key:
                     authenticated = True
                     ws_manager.set_client_license(client_id, fingerprint, license_plain)
+                    ws_manager.set_auth_server_key(
+                        client_id, server_key if isinstance(server_key, str) else ""
+                    )
                     pool_audit_emit(
                         config,
                         "auth_success",

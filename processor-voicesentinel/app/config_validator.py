@@ -17,6 +17,7 @@ class ConfigValidator:
         self._validate_transcription(config)
         self._validate_audio(config)
         self._validate_processing(config)
+        self._validate_report_buffer(config)
         return len(self.errors) == 0, self.errors, []
     
     def _validate_server(self, config: Dict[str, Any]):
@@ -93,6 +94,30 @@ class ConfigValidator:
                 self.errors.append("processing.queue_max_size must be at least 1")
         except (ValueError, TypeError):
             self.errors.append(f"processing.queue_max_size must be an integer, got: {type(qmax).__name__}")
+
+    def _validate_report_buffer(self, config: Dict[str, Any]):
+        rb = config.get("report_buffer")
+        if rb is None:
+            return
+        if not isinstance(rb, dict):
+            self.errors.append(f"report_buffer must be an object, got: {type(rb).__name__}")
+            return
+        if "enabled" in rb and not isinstance(rb.get("enabled"), bool):
+            self.errors.append("report_buffer.enabled must be a boolean")
+        if "save_audio" in rb and not isinstance(rb.get("save_audio"), bool):
+            self.errors.append("report_buffer.save_audio must be a boolean")
+        path = rb.get("path")
+        if path is not None and not isinstance(path, str):
+            self.errors.append(f"report_buffer.path must be a string, got: {type(path).__name__}")
+        rs_raw = rb.get("retention_seconds", 604800)
+        try:
+            rs = int(rs_raw)
+            if rs < 60 or rs > 31536000:
+                self.errors.append("report_buffer.retention_seconds must be between 60 and 31536000")
+        except (TypeError, ValueError):
+            self.errors.append(
+                f"report_buffer.retention_seconds must be an integer, got: {type(rs_raw).__name__}"
+            )
 
 def validate_config(config: Dict[str, Any]) -> Dict[str, Any]:
     validator = ConfigValidator()
