@@ -11,8 +11,20 @@ Main command: **/voicesentinel** (aliases: **/vs**, **/voicesent**).
 | **/voicesentinel vcmute &lt;player&gt; &lt;duration&gt;** | Voice-mutes a player. Duration examples: `30m`, `2h`, `1d`. |
 | **/voicesentinel unvcmute &lt;player&gt;** | Removes their voice mute. |
 | **/voicesentinel discordtest all** | Sends a test payload to all Discord webhooks. Use `flag` or `mute` to test only one type. |
+| **/voicesentinel updatecheck** | Checks whether a newer plugin build is available (admin). |
+| **/voicesentinel webuser …** | Manage **web dashboard** accounts from **console or RCON only** (`list`, `create`, `delete`, `setpassword`, `setrole`, `setuplink`). See [Web dashboard](web-dashboard.md). |
 
-Reload and stats need **voicesentinel.reload** / **voicesentinel.stats**. Vcmute/unvcmute need **voicesentinel.vcmute**. Discordtest and the main command need **voicesentinel.admin** (or the right sub-permission).
+### Voice reports
+
+| Command | What it does |
+|--------|----------------|
+| **/reportvoice \[player\] \[minutes\]** (alias **/rvoice**) | Player reports recent voice context to staff (needs **`voicesentinel.report`**). May use a GUI if configured. |
+| **/viewreport &lt;player&gt; \[minutes\]** (alias **/vr**) | Staff: opens a written book with report text (**`voicesentinel.report.review`**). |
+| **/reportinbox** (aliases **/rinbox**, **/vreports**) | Staff: list reports / mark reviewed (**`voicesentinel.report.review`**). |
+
+See [Voice reports & transcript buffer](voice-reports.md) for buffer settings and processor evidence.
+
+Reload and stats need **voicesentinel.reload** / **voicesentinel.stats**. Vcmute/unvcmute need **voicesentinel.vcmute**. Discordtest, updatecheck, **webuser**, and the main command need **voicesentinel.admin** (or the right sub-permission).
 
 ## Permissions
 
@@ -24,6 +36,8 @@ Reload and stats need **voicesentinel.reload** / **voicesentinel.stats**. Vcmute
 | **voicesentinel.reload** | op | Use `/voicesentinel reload`. |
 | **voicesentinel.stats** | op | Use `/voicesentinel stats`. |
 | **voicesentinel.vcmute** | op | Use vcmute and unvcmute. |
+| **voicesentinel.report** | true | Use **`/reportvoice`** to submit a report. |
+| **voicesentinel.report.review** | op | Receive report alerts, **`/viewreport`**, **`/reportinbox`**. |
 
 Example (LuckPerms): give someone bypass so they’re never checked:
 

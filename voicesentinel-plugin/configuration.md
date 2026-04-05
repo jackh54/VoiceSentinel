@@ -73,8 +73,17 @@ Set **discord.enabled** to `true` and **discord.webhook_url** to your webhook UR
 
 **privacy-join-msg** and **privacy-msg** control the notice players see when they join. Turn it off or edit the text to match your server’s policy.
 
+## Transcript buffer
+
+Rolling in-memory transcripts for staff review and **`/reportvoice`**. See [Voice reports & transcript buffer](voice-reports.md).
+
+## Web dashboard
+
+Optional browser console: **`web_dashboard`** (`enabled`, `bind_address`, `port`, `path_prefix`, sessions, rate limits, **`ip_allowlist`**). See [Web dashboard](web-dashboard.md).
+
 ## Other files
 
 - **wordlist.txt** – Profanity and mute words per language (see [Word lists](word-lists.md)).
 - **messages.yml** – In-game and alert text (MiniMessage).
 - **languages.yml** – Language options if you use them.
+- **web/web_auth.db** – Created when the web dashboard is used (SQLite accounts for the console).

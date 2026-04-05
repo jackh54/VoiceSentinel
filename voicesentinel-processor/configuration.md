@@ -91,6 +91,21 @@ Tighten **allow_origins** if you have a known front-end URL.
 | **confidence_threshold** | `0.7` | How confident the LLM must be to flag. |
 | **strictness** | `"medium"` | `"strict"`, `"medium"`, or `"lenient"`. |
 
+## Report buffer (optional)
+
+**report_buffer** – Optional on-disk retention of transcripts (and optional audio) for the plugin’s **report evidence** HTTP API. If **`enabled`** is `false`, the evidence endpoint returns **404** and the plugin relies on its local transcript buffer only.
+
+| Key | Typical | Description |
+|-----|---------|-------------|
+| **enabled** | `false` | Turn on to persist evidence under **`path`**. |
+| **path** | `"report_buffer/"` | Root directory for stored files. |
+| **retention_seconds** | `604800` | How long to keep data (e.g. 7 days). |
+| **save_audio** | `false` | Whether to retain audio alongside transcripts. |
+
+Files are organised under license- and server-key–scoped subfolders so different deployments do not share data. Use **HTTPS** and authentication headers as described in your deployment notes when exposing this API.
+
+Plugin-side behaviour is covered in [Voice reports & transcript buffer](../voicesentinel-plugin/voice-reports.md).
+
 ## Console
 
 **console** – Logging and live stats.

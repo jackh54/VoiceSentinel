@@ -9,6 +9,8 @@
 * [Installation](voicesentinel-plugin/installation.md)
 * [Getting your license key](voicesentinel-plugin/getting-your-license-key.md)
 * [Configuration](voicesentinel-plugin/configuration.md)
+* [Web dashboard](voicesentinel-plugin/web-dashboard.md)
+* [Voice reports & transcript buffer](voicesentinel-plugin/voice-reports.md)
 * [Commands and permissions](voicesentinel-plugin/commands-and-permissions.md)
 * [Word lists](voicesentinel-plugin/word-lists.md)
 * [Custom commands](voicesentinel-plugin/custom-commands.md)
