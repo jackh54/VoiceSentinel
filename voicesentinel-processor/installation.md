@@ -67,10 +67,11 @@ Use the VoiceSentinel Processor egg so the panel runs the processor for you. Ful
 
 ## After install
 
-- Set **server.server_key** in `config.json` to a shared secret (16–256 alphanumeric). Use the **exact same** value in the plugin’s **server_key** in config.yml. If they don’t match, the plugin won’t authenticate.
-- Open the port (e.g. 28472) on the host/firewall if the Minecraft server is on another machine.
-- For production, put the processor behind a reverse proxy with HTTPS and use `wss://` in the plugin; see [Securing your processor](securing-your-processor.md).
+- **Self-hosted (plugin CUSTOM mode):** Set **`server.server_key`** in **`config.json`** and the **same** value as **`server_key`** in the plugin’s **`config.yml`** (16–256 alphanumeric). Mismatch → auth failure in processor logs.  
+- **PUBLIC pool:** The Minecraft plugin uses **`processor_connection_mode: PUBLIC`**; you do **not** point it at your own **`config.json`** — follow license / pool setup instead.  
+- Open the processor port on the firewall if the game server is remote.  
+- For production, use a reverse proxy with **HTTPS** and **`wss://`**; see [Securing your processor](securing-your-processor.md).
 
 {% hint style="success" %}
-Once the processor is running and the plugin has the same **server_key** and correct **processor_websocket_url**, the plugin should connect. Check with `/voicesentinel stats` on the server.
+**CUSTOM:** When **`server_key`** and **`processor_websocket_url`** match your deployment, **`/voicesentinel stats`** on the server should show a healthy processor connection.
 {% endhint %}

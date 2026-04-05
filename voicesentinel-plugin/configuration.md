@@ -1,89 +1,162 @@
 ---
-description: Plugin config.yml – license, processor URL, server key, behaviour, word lists, and optional overrides.
+description: Plugin config.yml – license, processor connection (CUSTOM/PUBLIC), behaviour, mute ladder, transcript buffer, voice reports, web dashboard, Discord, and languages.
 ---
 
 # Configuration
 
-All of this lives in `plugins/VoiceSentinel/config.yml`. Restart the server or run `/voicesentinel reload` to apply changes.
+Everything here lives in **`plugins/VoiceSentinel/config.yml`**. Restart the server or run **`/voicesentinel reload`** after changes (unless noted).
 
-## Must-have
+## License and processor connection
 
 | Option | What it does |
 |--------|----------------|
-| **license-key** | Your license key. Required or the plugin won’t start. |
-| **processor_websocket_url** | Where the processor is. Example: `ws://localhost:28472` if it’s on the same machine, or `ws://processor.yourdomain.com` if it’s on another server. Use `wss://` if you put the processor behind HTTPS. |
-| **server_key** | Secret that must match the processor’s `server.server_key` (in its `config.json`). 16–256 letters/numbers. Same key in both places or the processor will reject the connection. |
+| **license-key** | Your license key. Required — the plugin will not start without it. |
+| **processor_connection_mode** | **`CUSTOM`** (default) = you run your own processor. **`PUBLIC`** = plugin uses the **shared processor pool** (discovered via **processor_discovery_url**). Keep the plugin updated for PUBLIC mode. |
+| **processor_websocket_url** | WebSocket URL of **your** processor when using CUSTOM, e.g. `ws://192.168.1.5:28472` or `wss://processor.example.com`. In PUBLIC mode the plugin still needs a valid URL shape; the effective endpoint comes from directory discovery. |
+| **processor_discovery_url** | Optional. Where the plugin fetches the PUBLIC pool directory. Default: PandaScript CDN directory URL. Override only if directed. |
+| **server_key** | **CUSTOM:** Must match **`server.server_key`** in the processor’s `config.json` (16–256 alphanumeric). **PUBLIC:** If left default/empty, the plugin uses an internal placeholder — the pool uses its own auth; you do **not** use your personal `server_key` for pool WebSocket auth. |
+| **server_name** | Optional display name sent with telemetry (can show in dashboards/alerts). |
 
 {% hint style="info" %}
-**server_key** must be identical in the plugin’s config.yml and the processor’s config.json. Copy-paste the value to avoid typos.
+**CUSTOM:** Copy **`server_key`** between plugin `config.yml` and processor **`config.json`** exactly. **PUBLIC:** Self-hosted **`server_key`** is not used for pool WebSocket authentication the same way; follow current license/pool instructions.
 {% endhint %}
 
-Example:
+Example (self-hosted):
 
 ```yaml
 license-key: "your-license-key"
+processor_connection_mode: CUSTOM
 processor_websocket_url: "ws://192.168.1.5:28472"
-server_key: "MySecretKeyAtLeast16Chars"
+server_key: "MySecretKeyAtLeast16CharsLong"
 ```
 
-## Behaviour
+## Core behaviour
 
-- **enabled** – `true`/`false`. Master switch for moderation.
-- **alert_staff** – If `true`, staff with `voicesentinel.alerts` get in-game alerts when something is flagged.
-- **flag_threshold** – How many times someone has to be flagged (in that “session”) before auto-mute or custom commands run. Default `1` = first offence can trigger it.
-- **mute-duration-minutes** – Default length of an auto-mute (e.g. `60` = 1 hour).
-- **disable-listening-on-mute** – If `true`, muted players can’t hear others either (full mute). If `false`, they just can’t talk.
+| Option | Description |
+|--------|-------------|
+| **enabled** | `true` / `false`. Master switch for sending audio to the processor and applying moderation. |
+| **alert_staff** | If `true`, players with **`voicesentinel.alerts`** get in-game alerts when content is flagged. |
+| **flag_threshold** | How many flags in a session before auto-mute / custom commands run. Default `1` = first hit can trigger. |
+| **mute-duration-minutes** | Default auto-mute length when **not** using the mute ladder (e.g. `60` = 1 hour). |
+| **disable-listening-on-mute** | If `true`, muted players cannot hear others (full mute). If `false`, they only cannot transmit. |
+| **health_check_interval** | How often the plugin checks processor health (milliseconds). Default `10000`. |
+
+## Mute ladder (LuckPerms)
+
+Optional escalating durations for **repeat** auto-mutes. Requires **LuckPerms**.
+
+```yaml
+mute_ladder:
+  enabled: false
+  tiers:
+    1: "5m"
+    2: "15m"
+    3: "30m"
+    4: "1h"
+    5: "6h"
+  max_tier_duration: "24h"
+  reset_after_days: 30
+```
+
+Manual mutes with an explicit duration **bypass** the ladder. **`mute-duration-minutes`** applies when the ladder is off or for non-ladder paths.
 
 ## Word lists
 
-By default the plugin uses `wordlist.txt` in the same folder (and sends that to the processor). You can override that per-server in config:
+- **`wordlist.txt`** in `plugins/VoiceSentinel/` — per-language **PROFANITY** / **MUTE** sections (see [Word lists](word-lists.md)).
+- **`profanity_words`** / **`mute-list`** in YAML — if non-empty, they **replace** the default-language lists sent to the processor for those categories. Empty `[]` means “use **wordlist.txt**”. Legacy alias: **`profanity_list`** is accepted like **`profanity_words`**.
 
-```yaml
-# Use only these words (ignores wordlist.txt for the default language)
-profanity_words:
-  - badword1
-  - badword2
-mute-list:
-  - muteword1
-```
+After edits, run **`/voicesentinel reload`**.
 
-Leave both as `[]` to use `wordlist.txt` (and any per-language lists) instead.
-
-## Custom commands
-
-When someone gets auto-muted or only profanity is detected, you can run console commands. Placeholders: `{player}`, `{words}`, `{transcript}`.
-
-Example:
-
-```yaml
-custom_commands:
-  mute_commands:
-    - "say [Voice] {player} was auto-muted for: {words}"
-  profanity_commands:
-    - "say [Voice] Profanity from {player}: {words}"
-```
-
-Commands run as the server console. See [Custom commands](custom-commands.md) for more.
-
-## Discord
-
-Set **discord.enabled** to `true` and **discord.webhook_url** to your webhook URL to send flagged-content alerts to a channel. Use **discord_mute** for mute/unmute notifications (separate webhook if you want). Test with `/voicesentinel discordtest all` (or `flag` / `mute`).
-
-## Privacy message
-
-**privacy-join-msg** and **privacy-msg** control the notice players see when they join. Turn it off or edit the text to match your server’s policy.
+Optional: **`case_sensitive`** — if `true`, word-list matching uses case-sensitive checks (default `false`).
 
 ## Transcript buffer
 
-Rolling in-memory transcripts for staff review and **`/reportvoice`**. See [Voice reports & transcript buffer](voice-reports.md).
+Rolling **in-memory** transcripts per player — used for the **web dashboard** moderation view and for **`/reportvoice`** data. Independent of whether **`voice_report.enabled`** is true.
+
+```yaml
+transcript_buffer:
+  enabled: true
+  retention_seconds: 43200
+  max_lines_per_player: 500
+```
+
+See [Voice reports & transcript buffer](voice-reports.md).
+
+## Voice report (`voice_report`)
+
+Player **`/reportvoice`** and staff **`/viewreport`** / **`/reportinbox`**. Key options:
+
+| Option | Description |
+|--------|-------------|
+| **enabled** | Turns the player-facing report flow on or off. |
+| **interface** | **`command`** = `/reportvoice [player] [minutes]`. **`gui`** = chest UI to pick player and time range. |
+| **default_report_window_seconds** / **min_** / **max_** | Allowed time window for a report (clamped). |
+| **report_window_options_seconds** | GUI button lengths (seconds), clamped to min/max. |
+| **processor_evidence_url** | HTTP base for processor evidence (e.g. `https://processor.example.com`). Empty = derived from the WebSocket URL. |
+| **webhook_url** | Optional Discord webhook for the same summary staff see in-game. |
+| **staff_chat_full_transcript** | If `true`, staff also get the full plain text in chat (can be spammy). |
 
 ## Web dashboard
 
-Optional browser console: **`web_dashboard`** (`enabled`, `bind_address`, `port`, `path_prefix`, sessions, rate limits, **`ip_allowlist`**). See [Web dashboard](web-dashboard.md).
+Browser operator console. See [Web dashboard](web-dashboard.md).
+
+```yaml
+web_dashboard:
+  enabled: false
+  bind_address: "127.0.0.1"
+  port: 8124
+  path_prefix: "/voicesentinel/web"
+  session_minutes: 480
+  max_login_attempts_per_minute: 20
+  setup_token_minutes: 15
+  ip_allowlist: []
+```
+
+## Custom commands
+
+Console commands when someone is auto-muted or only profanity is flagged. Placeholders: **`{player}`**, **`{words}`**, **`{transcript}`**.
+
+```yaml
+custom_commands:
+  mute_commands: []
+  profanity_commands: []
+```
+
+See [Custom commands](custom-commands.md).
+
+## Discord (flagged content)
+
+Under **`discord`**: **enabled**, **webhook_url**, **username**, **avatar_url**, **embed_color**, **ping_role_id**, **timeout_seconds**, **retry_attempts**, **include_transcript**, **include_server_info**, **include_audio** (requires **`response.include_audio: true`** on the processor), plus **customization** titles/fields.
+
+Test: **`/voicesentinel discordtest`** with **`all`**, **`flag`**, or **`mute`**.
+
+## Discord (mute / unmute)
+
+Under **`discord_mute`**: separate webhook for mute/unmute events. **include_transcript** can be **`flagged`**, **`muted`**, **`both`**, or **`none`**. **include_audio** also requires the processor **`response.include_audio`** flag.
+
+## Privacy join message
+
+**privacy-join-msg** and **privacy-msg** control the notice shown when players join.
+
+## Languages
+
+```yaml
+languages:
+  enabled: ["en"]
+  default: "en"
+```
+
+## Placeholder API
+
+**placeholder_api** – integration hook; leave **`enabled: false`** unless you use that feature.
 
 ## Other files
 
-- **wordlist.txt** – Profanity and mute words per language (see [Word lists](word-lists.md)).
-- **messages.yml** – In-game and alert text (MiniMessage).
-- **languages.yml** – Language options if you use them.
-- **web/web_auth.db** – Created when the web dashboard is used (SQLite accounts for the console).
+| File | Purpose |
+|------|---------|
+| **wordlist.txt** | Shared profanity/mute lists ([Word lists](word-lists.md)). |
+| **messages.yml** | In-game and alert text (MiniMessage). |
+| **languages.yml** | Extra language configuration when used. |
+| **web/web_auth.db** | SQLite store for web dashboard accounts (created when used). |
+
+Superusers can edit **word lists** from the **web dashboard**; changes are written back to **`wordlist.txt`**.

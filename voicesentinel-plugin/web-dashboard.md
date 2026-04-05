@@ -29,7 +29,7 @@ Open **`http://<bind>:<port><path_prefix>/`** (e.g. `http://127.0.0.1:8124/voice
 ## Accounts and roles
 
 * **Moderator** — can use the console for monitoring and moderation.
-* **Superuser** — same as moderator, plus **Config** (word lists from the browser) and **Activity log** (audit of web sign-ins and dashboard actions).
+* **Superuser** — same as moderator, plus **Config** (word lists from the browser) and **Activity log** (audit of web sign-ins and dashboard actions). Legacy **`operator`** accounts in the database are treated like superusers in the UI.
 
 Accounts are stored in **`plugins/VoiceSentinel/web/web_auth.db`**. Passwords are set with a one-time link or directly from the server console (see below).
 
@@ -47,9 +47,9 @@ These subcommands are **not** for in-game players; run them from the **server co
 
 | Subcommand | Purpose |
 |------------|---------|
-| **`webuser list`** | Lists dashboard accounts and whether a password is set. |
+| **`webuser list`** | Lists all dashboard accounts, role, and password state. |
 | **`webuser create <name> [moderator\|superuser]`** | Creates an account (no password until you set one). |
-| **`webuser delete <name>`** | Removes the account and clears its sessions and setup links. |
+| **`webuser delete <username>`** | Deletes the account and clears its active sessions and setup tokens. |
 | **`webuser setpassword <name> <password>`** | Sets password (may appear in logs — prefer **`setuplink`** when possible). |
 | **`webuser setrole <name> <moderator\|superuser>`** | Changes role. |
 | **`webuser setuplink <name>`** | Prints a one-time URL to set a password in the browser. |

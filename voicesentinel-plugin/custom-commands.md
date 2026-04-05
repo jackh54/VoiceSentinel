@@ -42,3 +42,5 @@ profanity_commands:
 ```
 
 Multiple commands run in order. If a command fails (e.g. wrong syntax), the rest still run. Use quotes in YAML when the command has spaces or special characters.
+
+Word matching can use **`case_sensitive: true`** in **`config.yml`** (see [Configuration](configuration.md)).

@@ -2,7 +2,7 @@
 
 ## With Docker
 
-From `VoiceSentinel/processor-voicesentinel` (with **config.json** in place):
+From **`VoiceSentinel/processor-voicesentinel`** (with **`config.json`** in place):
 
 ```bash
 docker compose up -d
@@ -20,7 +20,7 @@ Stop:
 docker compose down
 ```
 
-The compose file exposes port **28472** by default and mounts **config.json** and optionally a recordings directory. Healthcheck pings **/health** so orchestrators can see if it’s up.
+The compose file exposes port **28472** by default and mounts **`config.json`** (and optionally recordings). Healthcheck hits **GET /health**.
 
 ## Without Docker (manual)
 
@@ -30,17 +30,19 @@ Activate your venv, then:
 python3 -m uvicorn app.main:app --host 0.0.0.0 --port 28472
 ```
 
-Use the same port as in **config.json** (**server.port**). To use a different port, pass e.g. `--port 9000` and set **server.port** in config to match so the plugin knows where to connect.
+Use the same port as **`server.port`** in **`config.json`**. For another port, pass **`--port`** and update **`config.json`** so the plugin’s **`processor_websocket_url`** matches.
 
-Run it in the background with **screen**, **tmux**, or a systemd service so it keeps running after you log out.
+Run under **screen**, **tmux**, or **systemd** for production.
 
-## Endpoints
+## HTTP endpoints
 
-- **GET /health** – Returns `{"status":"healthy","version":"3.0.0"}`. Use this for load balancers and health checks.
-- **GET /stats** – Returns connection and queue info: **active_connections**, **transcriber_ready**, **processing_queue_size**.
+- **GET /health** — JSON with **`status`** and **`version`** (processor build string). Use for load balancers and monitoring.
+- **GET /stats** — Connection and queue metrics (**active_connections**, **transcriber_ready**, **processing_queue_size**, etc.).
 
-The plugin talks over **WebSocket** at **/ws/&lt;client_id&gt;**. It sends **auth** first (with **server_key**), then **audio_chunk** messages. You don’t call the WebSocket URL from a browser for normal use; the plugin does it.
+## WebSocket
+
+The plugin connects over WebSocket (path includes a client id). It sends **auth** (with **server_key** in **CUSTOM** deployments), then **audio_chunk** messages. Normal gameplay does not use a browser against the WebSocket URL.
 
 ## First run
 
-On first run the app downloads the Whisper model (from Hugging Face). That can take a few minutes and needs internet. After that it’s cached. If startup seems to hang, check the logs – it’s often still downloading.
+The first start downloads the Whisper model from Hugging Face (can take several minutes; requires internet). Later starts use the cache. Set **`transcription.huggingface_token`** for faster, more reliable downloads ([Hugging Face models](huggingface-models.md)).

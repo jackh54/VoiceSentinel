@@ -12,7 +12,9 @@ Main command: **/voicesentinel** (aliases: **/vs**, **/voicesent**).
 | **/voicesentinel unvcmute &lt;player&gt;** | Removes their voice mute. |
 | **/voicesentinel discordtest all** | Sends a test payload to all Discord webhooks. Use `flag` or `mute` to test only one type. |
 | **/voicesentinel updatecheck** | Checks whether a newer plugin build is available (admin). |
-| **/voicesentinel webuser …** | Manage **web dashboard** accounts from **console or RCON only** (`list`, `create`, `delete`, `setpassword`, `setrole`, `setuplink`). See [Web dashboard](web-dashboard.md). |
+| **/voicesentinel webuser list** | Console/RCON: list web dashboard accounts. |
+| **/voicesentinel webuser delete &lt;username&gt;** | Console/RCON: remove a web account and its sessions. |
+| **/voicesentinel webuser …** | Other subcommands: **`create`**, **`setpassword`**, **`setrole`**, **`setuplink`** (console/RCON only). See [Web dashboard](web-dashboard.md). |
 
 ### Voice reports
 

@@ -8,13 +8,15 @@ description: >-
 
 You need a few things in place before the plugin will work:
 
-* **Paper or Folia 1.21+** (Bukkit/Spigot won’t cut it)
+* **Paper or Folia 1.21+** (Bukkit/Spigot is not supported)
 * **Java 17+**
-* **LuckPerms** (required – the plugin uses it for voice mutes)
-* **Simple Voice Chat** (the mod players use to talk)
-* The **VoiceSentinel processor** running somewhere and reachable from the server (see the Processor docs)
+* **LuckPerms** (required — voice mutes use it)
+* **Simple Voice Chat** (the mod players use for voice)
+* A **VoiceSentinel processor** you are allowed to use:
+  * **CUSTOM** — your own processor (Docker, bare metal, or host), or
+  * **PUBLIC** — the shared pool (set **`processor_connection_mode: PUBLIC`** in `config.yml` and keep the plugin updated)
 
-Drop `VoiceSentinel.jar` into your server’s `plugins` folder and restart. On first start it’ll create `plugins/VoiceSentinel/` with config files.
+Drop **`VoiceSentinel.jar`** into **`plugins/`** and restart. On first start it creates **`plugins/VoiceSentinel/`** with **`config.yml`**, **`messages.yml`**, and related files.
 
 **Then finish setup:**
 
@@ -22,28 +24,27 @@ Drop `VoiceSentinel.jar` into your server’s `plugins` folder and restart. On f
 {% step %}
 ### Add your license key
 
-Put your **license key** in `config.yml`. See [Getting your license key](getting-your-license-key.md).
+Put your **license key** in **`config.yml`**. See [Getting your license key](getting-your-license-key.md).
 {% endstep %}
 
 {% step %}
-### Point the plugin at the processor
+### Choose CUSTOM or PUBLIC processor
 
-Set **processor\_websocket\_url** in `config.yml` to where the processor is (e.g. `ws://192.168.1.10:28472` or `ws://processor.yourserver.com`).
-{% endstep %}
-
-{% step %}
-### Set the shared secret
-
-Set **server\_key** in `config.yml` to the **exact same** value as **server.server\_key** in the processor’s `config.json` (16–256 letters/numbers). If they don’t match, the plugin won’t connect.
+* **CUSTOM (default):** Set **`processor_connection_mode: CUSTOM`**, set **`processor_websocket_url`** to your processor (e.g. `ws://192.168.1.10:28472` or `wss://processor.example.com`), and set **`server_key`** to the **exact same** value as **`server.server_key`** in the processor’s **`config.json`** (16–256 alphanumeric).
+* **PUBLIC pool:** Set **`processor_connection_mode: PUBLIC`**. The plugin discovers pool endpoints from the directory (see **`processor_discovery_url`** in [Configuration](configuration.md)). You typically do **not** supply your own **`server_key`** for pool WebSocket auth the same way as self-hosted.
 {% endstep %}
 
 {% step %}
 ### Reload or restart
 
-Restart the server, or run `/voicesentinel reload`, so the plugin picks up the config.
+Restart the server, or run **`/voicesentinel reload`**, so the plugin loads the new settings.
 {% endstep %}
 {% endstepper %}
 
 {% hint style="danger" %}
-**Do not use Plugman (or similar) to load VoiceSentinel.** It has to load with the server so it can hook into Simple Voice Chat. Loading it late will break that and cause issues.
+**Do not use Plugman (or similar) to load VoiceSentinel late.** It must load with the server so it can integrate with Simple Voice Chat.
 {% endhint %}
+
+## Optional: web dashboard
+
+If you enable **`web_dashboard`** in **`config.yml`**, create accounts with **`voicesentinel webuser …`** from the **server console or RCON** (not in-game). See [Web dashboard](web-dashboard.md).

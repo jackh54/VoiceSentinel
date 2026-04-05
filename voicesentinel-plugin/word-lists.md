@@ -1,50 +1,46 @@
 # Word lists
 
-The plugin (and processor) use word lists to decide what counts as profanity vs. what triggers an auto-mute. You can use the built-in **wordlist.txt** or override it in **config.yml**.
+The plugin and processor use lists to classify **profanity** (flag / alert) vs **mute** (auto-mute path). You can use **`wordlist.txt`**, **`config.yml`**, and/or the **web dashboard** (superusers).
 
 ## wordlist.txt
 
-Location: `plugins/VoiceSentinel/wordlist.txt`.
+Location: **`plugins/VoiceSentinel/wordlist.txt`**.
 
-Format: sections by language and type, then one word per line. Lines starting with `#` are comments.
+Format: sections by **language** and **type**, one word per line. Lines starting with **`#`** are comments.
 
-- **PROFANITY** – Triggers alerts and (optionally) profanity_commands. No auto-mute by default.
-- **MUTE** – Triggers auto-mute plus mute_commands and alerts.
+- **PROFANITY** — Flags, alerts, optional **profanity_commands** (no auto-mute from the list alone).
+- **MUTE** — Auto-mute path when thresholds are met, plus **mute_commands** and alerts.
 
-Section header format: `[LANG-TYPE]`. Language is the ISO code (e.g. `EN`, `ES`). The processor detects language and uses the matching section.
+Section headers: **`[LANG-TYPE]`** (e.g. **`[EN-PROFANITY]`**, **`[EN-MUTE]`**). The processor uses detected language to pick a section.
 
 Example:
 
 ```text
-# English – profanity only (alerts / profanity_commands)
 [EN-PROFANITY]
 word1
+
+[EN-MUTE]
 word2
 
-# English – auto-mute
-[EN-MUTE]
-word3
-word4
-
-# Spanish
 [ES-PROFANITY]
-word5
+word3
 ```
 
-So if someone speaks English and says something in the MUTE list, they get auto-muted. If it’s only in the PROFANITY list, they get flagged and you can run profanity_commands (e.g. a warning) but no mute unless you add the word to MUTE too.
-
 ## Overriding in config.yml
-
-If you don’t want to edit wordlist.txt and just want a short list for your server:
 
 ```yaml
 profanity_words:
   - badword1
-  - badword2
 mute-list:
   - muteword1
 ```
 
-Non-empty lists here **replace** the default-language lists from wordlist.txt for what gets sent to the processor. Leave them as `[]` to use wordlist.txt (and per-language lists) instead.
+Non-empty lists **replace** the default-language content from **wordlist.txt** for what is sent to the processor. Empty **`[]`** means use **wordlist.txt**. The plugin also accepts the legacy key **`profanity_list`** as an alias for **`profanity_words`**.
 
-After changing wordlist.txt or these options, run `/voicesentinel reload` so the plugin picks it up.
+After changes, run **`/voicesentinel reload`**.
+
+## Web dashboard (superuser)
+
+Superusers can open **Config** in the **web dashboard** to add/remove words per language and type. Updates are saved to **`wordlist.txt`** on disk. Reload the plugin (or rely on the implementation’s live update path) if you also edit files by hand on disk.
+
+See [Web dashboard](web-dashboard.md) and [Configuration](configuration.md).

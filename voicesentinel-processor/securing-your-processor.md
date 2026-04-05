@@ -68,7 +68,14 @@ Then point the Nginx config at the paths Certbot gives you (usually under `/etc/
 
 ## CORS
 
-If you only use the processor from the Minecraft plugin (no browser calls to your processor URL), CORS is less critical. The default in config allows all origins. If you build a web dashboard that calls **/health** or **/stats** from a browser, set **cors.allow_origins** to your front-end URL (e.g. `["https://dashboard.yourdomain.com"]`) instead of `["*"]`.
+If only the **Minecraft plugin** talks to the processor, CORS is usually irrelevant (no browser). The default allows all origins.
+
+Tighten **`cors.allow_origins`** if:
+
+* You call **/health** or **/stats** from a **browser**-based tool, or  
+* You expose other HTTP APIs to a known front-end origin.
+
+The **VoiceSentinel web dashboard** is served by the **plugin** (embedded server), not by the processor — it does not use processor CORS for normal operation.
 
 ## Firewall
 

@@ -25,3 +25,9 @@
 
 **Recording save / legal**  
 - **recordings.save_mode** controls whether WAVs are stored. Check your local laws and privacy policy. Prefer **"none"** or **"flagged"** unless you have a clear need and compliance in place. **retention_days** should match your policy.
+
+**Report evidence always 404**  
+- **`report_buffer.enabled`** must be **`true`** on the processor for **GET /report/evidence** to return data. If it is **`false`**, 404 is expected; the plugin still uses its **local transcript buffer** for **`/viewreport`** and the web dashboard.
+
+**Plugin uses PUBLIC pool**  
+- On the **Minecraft** side, **`processor_connection_mode: PUBLIC`** uses directory discovery — your **self-hosted** processor’s **server_key** is unrelated to pool auth. For **CUSTOM** self-hosted, keys must still match.

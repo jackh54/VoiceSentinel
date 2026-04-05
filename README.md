@@ -2,7 +2,7 @@
 
 <figure><img src=".gitbook/assets/Pbanner.png" alt=""><figcaption></figcaption></figure>
 
-**VoiceSentinel** ties a Minecraft plugin to a Python processor for live voice transcription and moderation (Simple Voice Chat).
+**VoiceSentinel** connects a **Paper/Folia** plugin to a **Python** processor for live voice transcription and moderation with **Simple Voice Chat**. You can run your **own** processor (**CUSTOM**) or use the **PUBLIC** pool (**`processor_connection_mode: PUBLIC`** in the plugin).
 
 Start here:
 

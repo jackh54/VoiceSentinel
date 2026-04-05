@@ -39,4 +39,4 @@ The egg’s startup command does not use **cd /mnt/server** or any path like **v
 
 ## Port and connection
 
-The panel assigns a port (e.g. 28472 or something else). In the plugin set **processor_websocket_url** to that host and port, e.g. `ws://processor.yourdomain.com:28472`, and use the same **server_key** in both configs.
+The panel assigns a port (e.g. 28472). On the **Minecraft** server, use **`processor_connection_mode: CUSTOM`**, set **`processor_websocket_url`** to that host and port (e.g. `wss://processor.example.com` behind HTTPS), and use the **same** **`server_key`** in the plugin **`config.yml`** and this processor’s **`config.json`**. If the Minecraft server uses **PUBLIC** pool mode instead, it does **not** connect to your Pterodactyl processor URL.
