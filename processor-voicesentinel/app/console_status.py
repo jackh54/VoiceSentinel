@@ -104,5 +104,5 @@ class ConsoleStatus:
             if os.isatty(sys.stdout.fileno()):
                 print("\033[2J\033[H", end="", flush=True)
             print(self.get_status_display(), flush=True)
-        except:
+        except Exception:
             print(self.get_status_display(), flush=True)

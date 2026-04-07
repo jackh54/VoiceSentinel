@@ -72,7 +72,7 @@ class FasterWhisperTranscriber:
                 temp_audio.write(audio_data)
                 temp_audio_path = temp_audio.name
             
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             
             def transcribe_sync():
                 segments, info = self.model.transcribe(
@@ -103,7 +103,7 @@ class FasterWhisperTranscriber:
             if temp_audio_path and os.path.exists(temp_audio_path):
                 try:
                     os.unlink(temp_audio_path)
-                except:
+                except Exception:
                     pass
 
 

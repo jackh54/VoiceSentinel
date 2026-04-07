@@ -37,7 +37,7 @@
   },
   "cors": {
     "allow_origins": ["*"],
-    "allow_credentials": true,
+    "allow_credentials": false,
     "allow_methods": ["*"],
     "allow_headers": ["*"]
   },

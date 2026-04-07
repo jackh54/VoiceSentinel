@@ -28,7 +28,7 @@ class ProfanityFilter:
                 compiled_pattern = re.compile(pattern, flags)
                 patterns.append(compiled_pattern)
                 pattern_to_word[compiled_pattern] = word
-            except:
+            except Exception:
                 pass
         return patterns, pattern_to_word
     

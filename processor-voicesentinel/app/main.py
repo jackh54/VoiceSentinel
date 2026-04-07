@@ -25,6 +25,7 @@ from app.report_buffer import (
     query_report_evidence,
     query_report_audio,
     sanitize_player_query,
+    sanitize_seconds_seconds,
     check_evidence_rate_limits,
 )
 
@@ -125,7 +126,7 @@ def get_default_config():
         "response": {"include_audio": False},
         "cors": {
             "allow_origins": ["*"],
-            "allow_credentials": True,
+            "allow_credentials": False,
             "allow_methods": ["*"],
             "allow_headers": ["*"]
         },
@@ -622,12 +623,12 @@ async def report_evidence(
     cfg_key = (config.get("server") or {}).get("server_key") or ""
     sk_for_query = ""
     if isinstance(cfg_key, str) and cfg_key.strip():
-        req_key = request.headers.get("x-server-key") or request.query_params.get("server_key") or ""
+        req_key = request.headers.get("x-server-key") or ""
         if req_key != cfg_key:
             raise HTTPException(status_code=401, detail="Invalid server key")
         sk_for_query = req_key
     else:
-        sk_for_query = request.headers.get("x-server-key") or request.query_params.get("server_key") or ""
+        sk_for_query = request.headers.get("x-server-key") or ""
     pq = sanitize_player_query(player)
     if not pq:
         raise HTTPException(status_code=400, detail="Invalid player parameter")
@@ -665,7 +666,7 @@ async def report_audio(
         client_ip = ""
     if not await check_evidence_rate_limits(fp_ev, client_ip):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
-    sk_for_query = request.headers.get("x-server-key") or request.query_params.get("server_key") or ""
+    sk_for_query = request.headers.get("x-server-key") or ""
     pq = sanitize_player_query(player)
     if not pq:
         raise HTTPException(status_code=400, detail="Invalid player parameter")
@@ -757,13 +758,13 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                 if isinstance(profanity_words, str):
                     try:
                         profanity_words = json.loads(profanity_words)
-                    except:
+                    except Exception:
                         profanity_words = []
-                
+
                 if isinstance(language_word_lists, str):
                     try:
                         language_word_lists = json.loads(language_word_lists)
-                    except:
+                    except Exception:
                         language_word_lists = {}
                 
                 if audio_b64:

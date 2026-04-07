@@ -10,6 +10,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+_last_cleanup: Dict[str, float] = {}
+_CLEANUP_INTERVAL = 3600.0  # run at most once per hour per tenant
+
 logger = logging.getLogger(__name__)
 
 _FINGERPRINT_RE = re.compile(r"^[a-f0-9]{64}$")
@@ -83,6 +86,8 @@ def report_buffer_append(
         return
     root = Path(rb.get("path", "report_buffer/"))
     root.mkdir(parents=True, exist_ok=True)
+    retention_seconds = float(rb.get("retention_seconds", 604800))
+    _maybe_cleanup(root, fp, server_key, retention_seconds)
     path = _tenant_transcript_path(root, fp, server_key)
     path.parent.mkdir(parents=True, exist_ok=True)
     line = json.dumps(record, separators=(",", ":"), ensure_ascii=False) + "\n"
@@ -97,6 +102,58 @@ def report_buffer_append(
             (audio_dir / f"{ts}_{safe}.wav").write_bytes(audio_wav)
         except OSError as e:
             logger.warning("report_buffer audio save failed: %s", e)
+
+
+def _cleanup_tenant(tenant_dir: Path, retention_seconds: float) -> None:
+    """Delete transcript lines and audio files older than retention_seconds."""
+    cutoff = time.time() - retention_seconds
+
+    # Prune old lines from transcripts.jsonl
+    transcript_path = tenant_dir / "transcripts.jsonl"
+    if transcript_path.is_file():
+        try:
+            kept = []
+            with open(transcript_path, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    ts = obj.get("ts") or ""
+                    try:
+                        ts_sec = datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+                    except (ValueError, TypeError):
+                        ts_sec = cutoff + 1  # keep lines with unparseable timestamps
+                    if ts_sec >= cutoff:
+                        kept.append(line)
+            with open(transcript_path, "w", encoding="utf-8") as f:
+                for line in kept:
+                    f.write(line + "\n")
+        except OSError as e:
+            logger.warning("report_buffer retention cleanup (transcripts) failed: %s", e)
+
+    # Delete old audio files
+    audio_dir = tenant_dir / "audio"
+    if audio_dir.is_dir():
+        try:
+            for wav in audio_dir.glob("*.wav"):
+                if wav.stat().st_mtime < cutoff:
+                    wav.unlink(missing_ok=True)
+        except OSError as e:
+            logger.warning("report_buffer retention cleanup (audio) failed: %s", e)
+
+
+def _maybe_cleanup(root: Path, fp: str, server_key: str, retention_seconds: float) -> None:
+    tenant_dir = _tenant_transcript_path(root, fp, server_key).parent
+    key = str(tenant_dir)
+    now = time.time()
+    if now - _last_cleanup.get(key, 0.0) < _CLEANUP_INTERVAL:
+        return
+    _last_cleanup[key] = now
+    _cleanup_tenant(tenant_dir, retention_seconds)
 
 
 async def _rate_ok(bucket: Dict[str, List[float]], key: str, limit: int) -> bool:
@@ -187,7 +244,7 @@ def query_report_evidence(
     merged: List[Dict[str, Any]] = []
     for path in (primary, legacy):
         for row in _read_evidence_file(path, pl, cutoff):
-            key = (row.get("ts") or "", row.get("transcript") or "", row.get("session_id") or "")
+            key = (row.get("ts") or "", row.get("transcript") or "", row.get("session_id") or "", row.get("detected_language") or "")
             if key in seen:
                 continue
             seen.add(key)
