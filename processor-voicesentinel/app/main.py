@@ -10,6 +10,7 @@ import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 from contextlib import asynccontextmanager
+from typing import Optional, Tuple
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
@@ -37,7 +38,7 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)]
 )
 
-os.environ['HF_HUB_DISABLE_PROGRESS_BARS'] = '0'
+os.environ['HF_HUB_DISABLE_PROGRESS_BARS'] = '1'
 logging.getLogger("huggingface_hub").setLevel(logging.INFO)
 logging.getLogger("huggingface_hub.file_download").setLevel(logging.INFO)
 
@@ -65,6 +66,58 @@ def license_from_auth_payload(data: dict) -> tuple[str, str]:
     if license_plain:
         fingerprint = hashlib.sha256(license_plain.encode("utf-8")).hexdigest()
     return fingerprint, license_plain
+
+
+def _normalize_language_code(code) -> str:
+    if code is None:
+        return ""
+    if not isinstance(code, str):
+        code = str(code)
+    s = code.strip().lower()
+    if not s or s == "unknown":
+        return ""
+    if "-" in s:
+        s = s.split("-", 1)[0]
+    return s
+
+
+def _language_entry_lists(inner: dict) -> Tuple[list, list]:
+    if not isinstance(inner, dict):
+        return [], []
+    prof = inner.get("PROFANITY") or inner.get("profanity") or []
+    mute = inner.get("MUTE") or inner.get("mute") or []
+    if not isinstance(prof, list):
+        prof = list(prof) if prof else []
+    if not isinstance(mute, list):
+        mute = list(mute) if mute else []
+    return list(prof), list(mute)
+
+
+def _resolve_per_language_lists(
+    language_word_lists: dict,
+    whisper_lang,
+    client_hint_lang,
+) -> Tuple[list, list, Optional[str]]:
+    """
+    Pick PROFANITY/MUTE lists from language_word_lists using Whisper language first,
+    then the client's configured default (detected_language hint). Keys are matched
+    case-insensitively and BCP-47 prefixes (e.g. en-US -> en).
+    """
+    if not language_word_lists or not isinstance(language_word_lists, dict):
+        return [], [], None
+    norm_to_actual: dict[str, str] = {}
+    for k in language_word_lists:
+        nk = _normalize_language_code(k)
+        if nk and nk not in norm_to_actual:
+            norm_to_actual[nk] = k
+    for candidate in (whisper_lang, client_hint_lang):
+        nk = _normalize_language_code(candidate)
+        if nk and nk in norm_to_actual:
+            actual = norm_to_actual[nk]
+            inner = language_word_lists.get(actual) or {}
+            prof, mute = _language_entry_lists(inner)
+            return prof, mute, actual
+    return [], [], None
 
 
 def load_config():
@@ -261,7 +314,18 @@ class WebSocketManager:
         except Exception as e:
             logger.error(f"Audio buffering failed: {e}")
     
-    async def process_audio_final(self, client_id: str, audio_data: bytes, profanity_words: list, player_name: str = None, session_id: str = None, language_word_lists: dict = None):
+    async def process_audio_final(
+        self,
+        client_id: str,
+        audio_data: bytes,
+        profanity_words: list,
+        player_name: str = None,
+        session_id: str = None,
+        language_word_lists: dict = None,
+        partial_match: bool = True,
+        case_sensitive: bool = False,
+        language_hint: str = None,
+    ):
         try:
             final_audio = self.audio_buffers.get(client_id, b'') + audio_data
             self.audio_buffers[client_id] = b''
@@ -285,6 +349,9 @@ class WebSocketManager:
                 "player_name": player_name,
                 "session_id": session_id,
                 "language_word_lists": language_word_lists,
+                "partial_match": partial_match,
+                "case_sensitive": case_sensitive,
+                "language_hint": language_hint,
             }
             try:
                 self._processing_queue.put_nowait(job)
@@ -364,7 +431,18 @@ class WebSocketManager:
         except Exception:
             return False
     
-    async def _process_audio_async(self, client_id: str, audio_data: bytes, profanity_words: list, player_name: str = None, session_id: str = None, language_word_lists: dict = None):
+    async def _process_audio_async(
+        self,
+        client_id: str,
+        audio_data: bytes,
+        profanity_words: list,
+        player_name: str = None,
+        session_id: str = None,
+        language_word_lists: dict = None,
+        partial_match: bool = True,
+        case_sensitive: bool = False,
+        language_hint: str = None,
+    ):
         processing_start_time = time.monotonic()
         self.console_status.increment_processing()
         try:
@@ -384,22 +462,31 @@ class WebSocketManager:
             
             processing_time_ms = max(0, int((time.monotonic() - processing_start_time) * 1000))
             
-            language_profanity = []
-            language_mute = []
-            if language_word_lists and detected_language in language_word_lists:
-                language_profanity = language_word_lists.get(detected_language, {}).get("PROFANITY", [])
-                language_mute = language_word_lists.get(detected_language, {}).get("MUTE", [])
-            else:
+            language_profanity, language_mute, _matched_lang = _resolve_per_language_lists(
+                language_word_lists or {},
+                detected_language,
+                language_hint,
+            )
+            if not _matched_lang:
                 language_profanity = profanity_words
+                language_mute = []
             
             profanity_flagged_words = []
             if transcript and language_profanity:
-                temp_filter = ProfanityFilter(words=language_profanity, case_sensitive=False, partial_match=True)
+                temp_filter = ProfanityFilter(
+                    words=language_profanity,
+                    case_sensitive=case_sensitive,
+                    partial_match=partial_match,
+                )
                 profanity_flagged_words = temp_filter.check_text(transcript)
             
             mute_flagged_words = []
             if transcript and language_mute:
-                temp_filter = ProfanityFilter(words=language_mute, case_sensitive=False, partial_match=True)
+                temp_filter = ProfanityFilter(
+                    words=language_mute,
+                    case_sensitive=case_sensitive,
+                    partial_match=partial_match,
+                )
                 mute_flagged_words = temp_filter.check_text(transcript)
             
             is_profane = len(profanity_flagged_words) > 0
@@ -412,9 +499,13 @@ class WebSocketManager:
             
             if not is_profane and not should_mute and self.llm_detector and self.llm_detector.enabled and transcript:
                 try:
-                    logger.info(f"[{actual_player_name}] LLM check: Checking transcript (no word list match)")
                     llm_flagged, llm_confidence, llm_reason = await self.llm_detector.check_profanity(transcript, detected_language)
-                    logger.info(f"[{actual_player_name}] LLM result: flagged={llm_flagged}, confidence={llm_confidence:.2f}, reason={llm_reason}")
+                    logger.debug(
+                        "[%s] LLM profanity check: flagged=%s confidence=%.2f",
+                        actual_player_name,
+                        llm_flagged,
+                        llm_confidence,
+                    )
                     if llm_flagged:
                         is_profane = True
                 except Exception as e:
@@ -525,6 +616,9 @@ class WebSocketManager:
                     job.get("player_name"),
                     job.get("session_id"),
                     job.get("language_word_lists"),
+                    bool(job.get("partial_match", True)),
+                    bool(job.get("case_sensitive", False)),
+                    job.get("language_hint"),
                 )
             except asyncio.CancelledError:
                 break
@@ -581,7 +675,7 @@ cors_config = config.get("cors", {})
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_config.get("allow_origins", ["*"]),
-    allow_credentials=cors_config.get("allow_credentials", True),
+    allow_credentials=cors_config.get("allow_credentials", False),
     allow_methods=cors_config.get("allow_methods", ["*"]),
     allow_headers=cors_config.get("allow_headers", ["*"]),
 )
@@ -754,6 +848,17 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                 session_id = data.get("session_id", client_id)
                 is_final = data.get("is_final", False)
                 language_word_lists = data.get("language_word_lists", {})
+                partial_match = data.get("partial_match", True)
+                case_sensitive = data.get("case_sensitive", False)
+                if partial_match is None:
+                    partial_match = True
+                if case_sensitive is None:
+                    case_sensitive = False
+                partial_match = bool(partial_match)
+                case_sensitive = bool(case_sensitive)
+                language_hint = data.get("detected_language")
+                if language_hint is not None and not isinstance(language_hint, str):
+                    language_hint = str(language_hint)
                 
                 if isinstance(profanity_words, str):
                     try:
@@ -771,7 +876,17 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                     try:
                         audio_bytes = base64.b64decode(audio_b64)
                         if is_final:
-                            await ws_manager.process_audio_final(client_id, audio_bytes, profanity_words, player_name, session_id, language_word_lists)
+                            await ws_manager.process_audio_final(
+                                client_id,
+                                audio_bytes,
+                                profanity_words,
+                                player_name,
+                                session_id,
+                                language_word_lists,
+                                partial_match,
+                                case_sensitive,
+                                language_hint,
+                            )
                         else:
                             await ws_manager.process_audio(client_id, audio_bytes, profanity_words, player_name, session_id, language_word_lists)
                     except Exception as e:

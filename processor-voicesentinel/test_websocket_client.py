@@ -15,9 +15,11 @@ import argparse
 from pathlib import Path
 
 class VoiceSentinelTestClient:
-    def __init__(self, host="localhost", port=28472):
+    def __init__(self, host="localhost", port=28472, server_key="", license_key=""):
         self.host = host
         self.port = port
+        self.server_key = server_key
+        self.license_key = license_key
         self.websocket_url = f"ws://{host}:{port}/ws/test_client_{int(time.time())}"
         self.websocket = None
         
@@ -94,6 +96,22 @@ class VoiceSentinelTestClient:
         if not self.websocket:
             print("ERROR: Not connected to WebSocket")
             return False
+
+    async def authenticate(self):
+        """Authenticate before sending audio chunks."""
+        if not self.websocket:
+            print("ERROR: Not connected to WebSocket")
+            return False
+        auth_message = {"type": "auth", "server_key": self.server_key}
+        if self.license_key:
+            auth_message["license_key"] = self.license_key
+        try:
+            await self.websocket.send(json.dumps(auth_message))
+            print("Auth message sent")
+            return True
+        except Exception as e:
+            print(f"Failed to send auth message: {e}")
+            return False
         
         if profanity_words is None:
             profanity_words = ["test", "bad", "profanity"]
@@ -158,9 +176,9 @@ class VoiceSentinelTestClient:
             status = response.get("status", "unknown")
             print(f"Status update: {status}")
             
-        elif msg_type == "transcription_result":
+        elif msg_type in ("transcription_result", "final_transcript"):
             transcript = response.get("transcript", "")
-            is_profane = response.get("is_profane", False)
+            is_profane = response.get("is_profane", response.get("flagged", False))
             status = response.get("status", "unknown")
             
             print(f"Transcription result:")
@@ -215,12 +233,12 @@ class VoiceSentinelTestClient:
             print(f"Stats check error: {e}")
             return False
 
-async def run_full_test(host="localhost", port=28472, audio_file=None):
+async def run_full_test(host="localhost", port=28472, audio_file=None, server_key="", license_key=""):
     """Run a complete test of the WebSocket connection"""
     print("Starting VoiceSentinel WebSocket Test")
     print("=" * 50)
     
-    client = VoiceSentinelTestClient(host, port)
+    client = VoiceSentinelTestClient(host, port, server_key=server_key, license_key=license_key)
     
     # Test 1: Health check
     print("\n[1] Testing health endpoint...")
@@ -234,6 +252,10 @@ async def run_full_test(host="localhost", port=28472, audio_file=None):
     print("\n[3] Testing WebSocket connection...")
     if not await client.connect():
         print("Test failed: Cannot connect to WebSocket")
+        return False
+    if not await client.authenticate():
+        print("Test failed: Cannot authenticate")
+        await client.disconnect()
         return False
     
     # Test 4: Audio processing
@@ -278,15 +300,19 @@ async def run_full_test(host="localhost", port=28472, audio_file=None):
     print("\nTest completed!")
     return True
 
-async def interactive_test(host="localhost", port=28472):
+async def interactive_test(host="localhost", port=28472, server_key="", license_key=""):
     """Run an interactive test session"""
     print("Interactive VoiceSentinel WebSocket Test")
     print("=" * 50)
     
-    client = VoiceSentinelTestClient(host, port)
+    client = VoiceSentinelTestClient(host, port, server_key=server_key, license_key=license_key)
     
     if not await client.connect():
         print("Cannot connect to WebSocket")
+        return
+    if not await client.authenticate():
+        print("Cannot authenticate")
+        await client.disconnect()
         return
     
     print("\nCommands:")
@@ -330,14 +356,16 @@ def main():
     parser.add_argument("--port", type=int, default=28472, help="Server port (default: 28472)")
     parser.add_argument("--audio", help="Path to audio file to test with")
     parser.add_argument("--interactive", "-i", action="store_true", help="Run in interactive mode")
+    parser.add_argument("--server-key", default="", help="Processor server key (required when processor enforces server key)")
+    parser.add_argument("--license-key", default="", help="Optional license key for auth payload")
     
     args = parser.parse_args()
     
     try:
         if args.interactive:
-            asyncio.run(interactive_test(args.host, args.port))
+            asyncio.run(interactive_test(args.host, args.port, args.server_key, args.license_key))
         else:
-            asyncio.run(run_full_test(args.host, args.port, args.audio))
+            asyncio.run(run_full_test(args.host, args.port, args.audio, args.server_key, args.license_key))
     except KeyboardInterrupt:
         print("\nTest interrupted by user")
     except Exception as e:

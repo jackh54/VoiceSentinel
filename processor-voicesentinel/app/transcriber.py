@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import os
-import sys
 import tempfile
 
 logger = logging.getLogger(__name__)
@@ -20,31 +19,28 @@ class FasterWhisperTranscriber:
     def _load_model(self):
         try:
             from faster_whisper import WhisperModel
-            import os
-            
-            # Force progress bars to show
-            os.environ['HF_HUB_DISABLE_PROGRESS_BARS'] = '0'
-            os.environ['TQDM_DISABLE'] = '0'
-            
-            # Set HuggingFace token if provided
+
+            os.environ['HF_HUB_DISABLE_PROGRESS_BARS'] = '1'
+            os.environ['TQDM_DISABLE'] = '1'
+
             hf_token = self.config.get("transcription", {}).get("huggingface_token", "")
             if hf_token:
                 os.environ['HF_TOKEN'] = hf_token
-                print(f"Using HuggingFace token for faster downloads", flush=True)
-            
+                logger.info("Hugging Face token configured for model downloads")
+
             device = self.config.get("transcription", {}).get("device", "cpu")
             compute_type = self.config.get("transcription", {}).get("compute_type", "int8")
             cpu_threads = self.config.get("transcription", {}).get("cpu_threads", 2)
-            
-            print(f"\n{'='*60}", flush=True)
-            print(f"Loading Faster Whisper Model: {self.model_name}", flush=True)
-            print(f"Device: {device} | Compute: {compute_type}", flush=True)
-            print(f"This may take 5-15 minutes on first run (downloading ~3GB)", flush=True)
-            print(f"{'='*60}\n", flush=True)
-            
-            # Enable all huggingface logging and progress
-            for log_name in ['huggingface_hub', 'huggingface_hub.file_download', 'tqdm']:
-                logging.getLogger(log_name).setLevel(logging.INFO)
+
+            logger.info(
+                "Loading Faster Whisper model=%s device=%s compute=%s (first run may download several GB)",
+                self.model_name,
+                device,
+                compute_type,
+            )
+
+            for log_name in ('huggingface_hub', 'huggingface_hub.file_download', 'tqdm'):
+                logging.getLogger(log_name).setLevel(logging.WARNING)
                 logging.getLogger(log_name).propagate = True
             
             self.model = WhisperModel(
@@ -54,9 +50,7 @@ class FasterWhisperTranscriber:
                 num_workers=cpu_threads
             )
             
-            print(f"\n{'='*60}", flush=True)
-            print(f"Model loaded successfully!", flush=True)
-            print(f"{'='*60}\n", flush=True)
+            logger.info("Faster Whisper model loaded: %s", self.model_name)
         except Exception as e:
             logger.error(f"Failed to load model: {e}")
             raise
@@ -84,7 +78,11 @@ class FasterWhisperTranscriber:
                 )
                 # One line per Whisper segment so the plugin buffer (and report books) can paginate each phrase.
                 transcript = "\n".join(seg.text.strip() for seg in segments if seg.text and seg.text.strip()).strip()
-                detected_language = info.language if hasattr(info, 'language') else "unknown"
+                raw = getattr(info, "language", None) if info is not None else None
+                if isinstance(raw, str) and raw.strip():
+                    detected_language = raw.strip()
+                else:
+                    detected_language = "unknown"
                 return transcript, detected_language
             
             result = await asyncio.wait_for(
