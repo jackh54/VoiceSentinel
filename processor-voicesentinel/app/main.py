@@ -843,11 +843,16 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
             elif message_type == "audio_chunk" and authenticated:
                 import base64
                 audio_b64 = data.get("audio_data", "")
-                profanity_words = data.get("profanity_words", [])
+                # JSON null is present as Python None; .get(..., default) does not substitute for null.
+                profanity_words = data.get("profanity_words")
+                if profanity_words is None:
+                    profanity_words = []
                 player_name = data.get("player", client_id)
                 session_id = data.get("session_id", client_id)
                 is_final = data.get("is_final", False)
-                language_word_lists = data.get("language_word_lists", {})
+                language_word_lists = data.get("language_word_lists")
+                if language_word_lists is None:
+                    language_word_lists = {}
                 partial_match = data.get("partial_match", True)
                 case_sensitive = data.get("case_sensitive", False)
                 if partial_match is None:
@@ -865,12 +870,16 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                         profanity_words = json.loads(profanity_words)
                     except Exception:
                         profanity_words = []
+                if not isinstance(profanity_words, list):
+                    profanity_words = []
 
                 if isinstance(language_word_lists, str):
                     try:
                         language_word_lists = json.loads(language_word_lists)
                     except Exception:
                         language_word_lists = {}
+                if not isinstance(language_word_lists, dict):
+                    language_word_lists = {}
                 
                 if audio_b64:
                     try:
