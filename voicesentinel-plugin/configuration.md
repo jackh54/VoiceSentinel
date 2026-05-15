@@ -117,7 +117,7 @@ web_dashboard:
 
 ## Custom commands
 
-Console commands when someone is auto-muted or only profanity is flagged. Placeholders: **`{player}`**, **`{words}`**, **`{transcript}`**.
+Console commands when someone is **auto-muted** or when a hit is **profanity-only** (see [Custom commands](custom-commands.md) for exact conditions, **Folia/Paper** thread behaviour, and **command whitelist** notes). Placeholders: **`{player}`**, **`{words}`**, **`{transcript}`**.
 
 ```yaml
 custom_commands:

@@ -2,10 +2,12 @@
 
 When someone is auto-muted or only profanity is detected (no mute), you can run console commands. Those are defined in **config.yml** under **custom_commands**.
 
-- **mute_commands** – Run when the player is **auto-muted** (flag_threshold hit and the phrase was in the MUTE list).
-- **profanity_commands** – Run when they’re **flagged for profanity only** (flag_threshold hit but no mute).
+- **mute_commands** – Run **once** after a **successful auto-mute** for an **online** player ( **`flag_threshold`** reached, mute path, built-in mute applied). If the player is offline or auto-mute cannot run (e.g. LuckPerms missing when required), these commands do not fire.
+- **profanity_commands** – Run **once** when the hit is **profanity-only** (processor does **not** request a mute for that event), the response includes **profanity** detections, **`flag_threshold`** is reached, and at least one detected word is in your configured **`profanity_words`** list (or wordlist profanity section). If everything is classified as **mute-list** only, use **`mute_commands`** instead.
 
-Commands run as the **server console**. You can use placeholders; the plugin replaces them before running.
+Commands run as the **server console** on the **global / main tick thread** (Paper and Folia), so they behave like commands you typed in the server console. Use placeholders; the plugin substitutes them, then dispatches the line.
+
+If the server does not recognise the command (wrong name, plugin not loaded, or blocked), the plugin logs a **warning** that the custom command was not handled—check spelling and **command whitelist** plugins (many must allow the command for **console**).
 
 ## Placeholders
 
@@ -41,6 +43,8 @@ profanity_commands:
   - "say [Voice] Profanity from {player}: {words}"
 ```
 
-Multiple commands run in order. If a command fails (e.g. wrong syntax), the rest still run. Use quotes in YAML when the command has spaces or special characters.
+Multiple commands run **in order**. If one line throws (syntax error, etc.), the plugin logs it and continues with the rest. Use **YAML quotes** when the command has spaces, `:` in URLs, or special characters.
+
+Prefer the same form you would type in **console** without a leading slash (e.g. `say hello`, `ban SomePlayer 7d reason…`). Leading slashes are not required.
 
 Word matching can use **`case_sensitive: true`** in **`config.yml`** (see [Configuration](configuration.md)).

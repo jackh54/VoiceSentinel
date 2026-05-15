@@ -36,3 +36,9 @@
 
 **Mute ladder**  
 - Requires **LuckPerms**. Enable **`mute_ladder.enabled`**. Durations use the same syntax as **`/voicesentinel vcmute`** (e.g. `30m`, `1h`).
+
+**Custom commands (`mute_commands` / `profanity_commands`) never run**  
+- **`mute_commands`:** only after a **successful auto-mute** while the player is **online**. Check **LuckPerms** if the built-in LP mute is required and missing.  
+- **`profanity_commands`:** only on **profanity-only** flags (not the auto-mute path), with **`flag_threshold`** met and words matching your **`profanity_words`** config (see [Custom commands](custom-commands.md)).  
+- **CommandWhitelist** (or similar): allow the command root for **console**.  
+- Watch the server log for **“Custom command was not handled”** or dispatch errors after a flag.
