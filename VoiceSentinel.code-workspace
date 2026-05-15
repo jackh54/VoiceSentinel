@@ -1,0 +1,17 @@
+{
+  "folders": [
+    {
+      "path": ".",
+      "name": "VoiceSentinel (source · plugin & processor)"
+    },
+    {
+      "path": "../VoiceSentinel-docs-checkout",
+      "name": "VoiceSentinel (docs · docs branch · GitBook)"
+    }
+  ],
+  "settings": {
+    "files.exclude": {
+      "**/target": true
+    }
+  }
+}
