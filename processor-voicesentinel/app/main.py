@@ -160,6 +160,9 @@ def get_default_config():
             "compute_type": "int8",
             "timeout_seconds": 30,
             "cpu_threads": 2,
+            "beam_size": 5,
+            "vad_filter": True,
+            "use_memory_input": False,
             "huggingface_token": ""
         },
         "audio": {
@@ -169,7 +172,8 @@ def get_default_config():
             "channels": 1
         },
         "processing": {
-            "queue_max_size": 500
+            "queue_max_size": 500,
+            "worker_count": 1
         },
         "recordings": {
             "save_mode": "none",
@@ -217,16 +221,25 @@ class WebSocketManager:
         self.config = {}
         self.audio_buffers = {}
         self.buffer_metadata = {}
+        self.client_word_lists = {}
         self.console_status = None
         self._processing_queue = None
-        self._worker_task = None
+        self._worker_tasks = []
     
     async def initialize(self, config):
         self.config = config
         self.console_status = ConsoleStatus(config)
         queue_max = config.get("processing", {}).get("queue_max_size", 500)
         self._processing_queue = asyncio.Queue(maxsize=max(1, queue_max))
-        self._worker_task = asyncio.create_task(self._processing_worker())
+        worker_count = config.get("processing", {}).get("worker_count", 1)
+        try:
+            worker_count = max(1, int(worker_count))
+        except (TypeError, ValueError):
+            worker_count = 1
+        self._worker_tasks = [
+            asyncio.create_task(self._processing_worker())
+            for _ in range(worker_count)
+        ]
         transcription_config = config.get("transcription", {})
         
         self.transcriber = create_transcriber(
@@ -276,6 +289,35 @@ class WebSocketManager:
         self.active_connections.pop(client_id, None)
         self.audio_buffers.pop(client_id, None)
         self.buffer_metadata.pop(client_id, None)
+        self.client_word_lists.pop(client_id, None)
+
+    def update_client_word_lists(self, client_id: str, profanity_words: list, language_word_lists: dict) -> None:
+        self.client_word_lists[client_id] = {
+            "profanity_words": list(profanity_words or []),
+            "language_word_lists": dict(language_word_lists or {}),
+        }
+
+    def resolve_client_word_lists(
+        self,
+        client_id: str,
+        profanity_words,
+        language_word_lists,
+    ) -> tuple[list, dict]:
+        has_profanity = profanity_words is not None
+        has_language_lists = language_word_lists is not None
+        if has_profanity or has_language_lists:
+            resolved_profanity = profanity_words if profanity_words is not None else []
+            resolved_lists = language_word_lists if language_word_lists is not None else {}
+            if not isinstance(resolved_profanity, list):
+                resolved_profanity = []
+            if not isinstance(resolved_lists, dict):
+                resolved_lists = {}
+            self.update_client_word_lists(client_id, resolved_profanity, resolved_lists)
+            return resolved_profanity, resolved_lists
+        cached = self.client_word_lists.get(client_id)
+        if cached:
+            return cached.get("profanity_words", []), cached.get("language_word_lists", {})
+        return [], {}
     
     async def send_message(self, client_id: str, message: dict):
         if client_id in self.active_connections:
@@ -452,15 +494,17 @@ class WebSocketManager:
             actual_player_name = player_name or client_id
             
             transcription_timeout = self.config.get("transcription", {}).get("timeout_seconds", 30)
+            stt_start = time.monotonic()
             transcript, detected_language = await asyncio.wait_for(
                 self.transcriber.transcribe(audio_data),
                 timeout=float(transcription_timeout)
             )
-            
+            stt_time_ms = max(0, int((time.monotonic() - stt_start) * 1000))
+
             if client_id not in self.active_connections:
                 return
-            
-            processing_time_ms = max(0, int((time.monotonic() - processing_start_time) * 1000))
+
+            moderation_start = time.monotonic()
             
             language_profanity, language_mute, _matched_lang = _resolve_per_language_lists(
                 language_word_lists or {},
@@ -515,7 +559,10 @@ class WebSocketManager:
                 self.console_status.increment_flagged(actual_player_name)
                 if should_mute:
                     self.console_status.increment_muted(actual_player_name)
-            
+
+            moderation_time_ms = max(0, int((time.monotonic() - moderation_start) * 1000))
+            processing_time_ms = max(0, int((time.monotonic() - processing_start_time) * 1000))
+
             self.console_status.add_transcript(actual_player_name, transcript or "", detected_language, is_profane or should_mute, should_mute)
             
             actual_session_id = session_id or client_id
@@ -530,7 +577,9 @@ class WebSocketManager:
                 "mute_words": mute_flagged_words,
                 "player": actual_player_name,
                 "session_id": actual_session_id,
-                "processing_time_ms": max(0, processing_time_ms),
+                "processing_time_ms": processing_time_ms,
+                "stt_time_ms": stt_time_ms,
+                "moderation_time_ms": moderation_time_ms,
                 "detected_language": detected_language
             }
 
@@ -654,10 +703,11 @@ async def lifespan(app: FastAPI):
         ws_manager.console_status.print_status(force=True)
     asyncio.create_task(console_update_task())
     yield
-    if ws_manager._worker_task is not None:
-        ws_manager._worker_task.cancel()
+    for task in ws_manager._worker_tasks:
+        task.cancel()
+    for task in ws_manager._worker_tasks:
         try:
-            await ws_manager._worker_task
+            await task
         except asyncio.CancelledError:
             pass
 
@@ -843,16 +893,11 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
             elif message_type == "audio_chunk" and authenticated:
                 import base64
                 audio_b64 = data.get("audio_data", "")
-                # JSON null is present as Python None; .get(..., default) does not substitute for null.
-                profanity_words = data.get("profanity_words")
-                if profanity_words is None:
-                    profanity_words = []
+                raw_profanity_words = data.get("profanity_words") if "profanity_words" in data else None
+                raw_language_word_lists = data.get("language_word_lists") if "language_word_lists" in data else None
                 player_name = data.get("player", client_id)
                 session_id = data.get("session_id", client_id)
                 is_final = data.get("is_final", False)
-                language_word_lists = data.get("language_word_lists")
-                if language_word_lists is None:
-                    language_word_lists = {}
                 partial_match = data.get("partial_match", True)
                 case_sensitive = data.get("case_sensitive", False)
                 if partial_match is None:
@@ -864,22 +909,28 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                 language_hint = data.get("detected_language")
                 if language_hint is not None and not isinstance(language_hint, str):
                     language_hint = str(language_hint)
-                
-                if isinstance(profanity_words, str):
-                    try:
-                        profanity_words = json.loads(profanity_words)
-                    except Exception:
-                        profanity_words = []
-                if not isinstance(profanity_words, list):
-                    profanity_words = []
 
-                if isinstance(language_word_lists, str):
+                if isinstance(raw_profanity_words, str):
                     try:
-                        language_word_lists = json.loads(language_word_lists)
+                        raw_profanity_words = json.loads(raw_profanity_words)
                     except Exception:
-                        language_word_lists = {}
-                if not isinstance(language_word_lists, dict):
-                    language_word_lists = {}
+                        raw_profanity_words = []
+                if raw_profanity_words is not None and not isinstance(raw_profanity_words, list):
+                    raw_profanity_words = []
+
+                if isinstance(raw_language_word_lists, str):
+                    try:
+                        raw_language_word_lists = json.loads(raw_language_word_lists)
+                    except Exception:
+                        raw_language_word_lists = {}
+                if raw_language_word_lists is not None and not isinstance(raw_language_word_lists, dict):
+                    raw_language_word_lists = {}
+
+                profanity_words, language_word_lists = ws_manager.resolve_client_word_lists(
+                    client_id,
+                    raw_profanity_words,
+                    raw_language_word_lists,
+                )
                 
                 if audio_b64:
                     try:

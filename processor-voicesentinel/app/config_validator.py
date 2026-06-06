@@ -50,6 +50,17 @@ class ConfigValidator:
         timeout = transcription.get("timeout_seconds", 30)
         if not isinstance(timeout, (int, float)) or timeout < 1:
             self.errors.append(f"Invalid timeout: {timeout}")
+        beam_size = transcription.get("beam_size", 5)
+        try:
+            beam_size = int(beam_size)
+            if beam_size < 1:
+                self.errors.append("transcription.beam_size must be at least 1")
+        except (ValueError, TypeError):
+            self.errors.append(f"transcription.beam_size must be an integer, got: {type(beam_size).__name__}")
+        if "vad_filter" in transcription and not isinstance(transcription.get("vad_filter"), bool):
+            self.errors.append("transcription.vad_filter must be a boolean")
+        if "use_memory_input" in transcription and not isinstance(transcription.get("use_memory_input"), bool):
+            self.errors.append("transcription.use_memory_input must be a boolean")
     
     def _validate_audio(self, config: Dict[str, Any]):
         audio = config.get("audio", {})
@@ -94,6 +105,13 @@ class ConfigValidator:
                 self.errors.append("processing.queue_max_size must be at least 1")
         except (ValueError, TypeError):
             self.errors.append(f"processing.queue_max_size must be an integer, got: {type(qmax).__name__}")
+        worker_count = processing.get("worker_count", 1)
+        try:
+            worker_count = int(worker_count)
+            if worker_count < 1:
+                self.errors.append("processing.worker_count must be at least 1")
+        except (ValueError, TypeError):
+            self.errors.append(f"processing.worker_count must be an integer, got: {type(worker_count).__name__}")
 
     def _validate_report_buffer(self, config: Dict[str, Any]):
         rb = config.get("report_buffer")

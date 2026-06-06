@@ -122,6 +122,8 @@ Recording save modes:
 - Choose model size: `tiny` (fastest) to `large-v3` (most accurate)
 - Adjust `compute_type`: `int8` for CPU (fastest)
 - Configure CPU threads based on your cores
+- Set `transcription.beam_size: 1` and `processing.worker_count: 2+` in processor `config.json`
+- Tune plugin `audio_capture.silence_threshold_ms` (default 500) for faster end-of-utterance detection
 
 ## Security
 

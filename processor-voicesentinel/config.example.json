@@ -14,8 +14,11 @@
     "compute_type": "int8",
     "timeout_seconds": 30,
     "cpu_threads": 2,
+    "beam_size": 5,
+    "vad_filter": true,
+    "use_memory_input": false,
     "huggingface_token": "",
-    "_comment": "Model options: base (fastest, ~150MB), small (~500MB), medium (~1.5GB), large-v2/v3 (~3GB). Language: 'auto' for automatic detection (recommended for multi-language), 'en' for English-only (forces English transcription, may misinterpret other languages)"
+    "_comment": "Model options: base (fastest, ~150MB), small (~500MB), medium (~1.5GB), large-v2/v3 (~3GB). beam_size: 1 is faster, 5 is more accurate. use_memory_input: skip temp WAV files when true. Language: 'auto' for automatic detection (recommended for multi-language), 'en' for English-only (forces English transcription, may misinterpret other languages)"
   },
   "audio": {
     "min_audio_length_ms": 50,
@@ -29,7 +32,8 @@
     "retention_days": 7
   },
   "processing": {
-    "queue_max_size": 500
+    "queue_max_size": 500,
+    "worker_count": 1
   },
   "response": {
     "include_audio": false,

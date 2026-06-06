@@ -1,5 +1,6 @@
 # VoiceSentinel Project .gitignore
 
+metrics.md
 # Java / Maven
 *.class
 *.jar

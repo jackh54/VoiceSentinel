@@ -1,10 +1,45 @@
 import asyncio
+import io
 import logging
 import os
 import tempfile
+import wave
+
+import numpy as np
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
+TARGET_SAMPLE_RATE = 16000
+
+
+def _decode_wav_bytes(audio_data: bytes) -> tuple[np.ndarray, int]:
+    with wave.open(io.BytesIO(audio_data), "rb") as wf:
+        sample_rate = wf.getframerate()
+        channels = wf.getnchannels()
+        sample_width = wf.getsampwidth()
+        frames = wf.readframes(wf.getnframes())
+
+    if sample_width == 2:
+        samples = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
+    elif sample_width == 4:
+        samples = np.frombuffer(frames, dtype=np.float32)
+    else:
+        raise ValueError(f"Unsupported WAV sample width: {sample_width}")
+
+    if channels > 1:
+        samples = samples.reshape(-1, channels).mean(axis=1)
+
+    return samples, sample_rate
+
+
+def _resample_to_target(audio: np.ndarray, sample_rate: int, target_rate: int = TARGET_SAMPLE_RATE) -> np.ndarray:
+    if sample_rate == target_rate or len(audio) == 0:
+        return audio
+    ratio = sample_rate / target_rate
+    indices = (np.arange(int(len(audio) / ratio)) * ratio).astype(np.int64)
+    indices = indices[indices < len(audio)]
+    return audio[indices]
 
 
 class FasterWhisperTranscriber:
@@ -14,8 +49,12 @@ class FasterWhisperTranscriber:
         self.config = config or {}
         self.model = None
         self._load_model()
-        self.timeout_seconds = self.config.get("transcription", {}).get("timeout_seconds", 30)
-    
+        transcription = self.config.get("transcription", {})
+        self.timeout_seconds = transcription.get("timeout_seconds", 30)
+        self.beam_size = max(1, int(transcription.get("beam_size", 5)))
+        self.vad_filter = bool(transcription.get("vad_filter", True))
+        self.use_memory_input = bool(transcription.get("use_memory_input", False))
+
     def _load_model(self):
         try:
             from faster_whisper import WhisperModel
@@ -42,61 +81,44 @@ class FasterWhisperTranscriber:
             for log_name in ('huggingface_hub', 'huggingface_hub.file_download', 'tqdm'):
                 logging.getLogger(log_name).setLevel(logging.WARNING)
                 logging.getLogger(log_name).propagate = True
-            
+
             self.model = WhisperModel(
                 self.model_name,
                 device=device,
                 compute_type=compute_type,
                 num_workers=cpu_threads
             )
-            
+
             logger.info("Faster Whisper model loaded: %s", self.model_name)
         except Exception as e:
             logger.error(f"Failed to load model: {e}")
             raise
-    
-    
-    async def transcribe(self, audio_data: bytes) -> tuple:
-        if not self.model or len(audio_data) < 5000:
-            return "", "unknown"
-        
+
+    def _transcribe_sync(self, audio_data: bytes) -> tuple:
+        language = None if self.language == "auto" else self.language
+        transcribe_kwargs = {
+            "language": language,
+            "beam_size": self.beam_size,
+            "temperature": 0.0,
+            "vad_filter": self.vad_filter,
+        }
+
+        if self.use_memory_input:
+            try:
+                audio_array, sample_rate = _decode_wav_bytes(audio_data)
+                audio_array = _resample_to_target(audio_array, sample_rate)
+                segments, info = self.model.transcribe(audio_array, **transcribe_kwargs)
+                return self._segments_to_result(segments, info)
+            except Exception as e:
+                logger.debug("In-memory transcribe failed, falling back to temp file: %s", e)
+
         temp_audio_path = None
         try:
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_audio:
                 temp_audio.write(audio_data)
                 temp_audio_path = temp_audio.name
-            
-            loop = asyncio.get_running_loop()
-            
-            def transcribe_sync():
-                segments, info = self.model.transcribe(
-                    temp_audio_path,
-                    language=None if self.language == "auto" else self.language,
-                    beam_size=5,
-                    temperature=0.0,
-                    vad_filter=True
-                )
-                # One line per Whisper segment so the plugin buffer (and report books) can paginate each phrase.
-                transcript = "\n".join(seg.text.strip() for seg in segments if seg.text and seg.text.strip()).strip()
-                raw = getattr(info, "language", None) if info is not None else None
-                if isinstance(raw, str) and raw.strip():
-                    detected_language = raw.strip()
-                else:
-                    detected_language = "unknown"
-                return transcript, detected_language
-            
-            result = await asyncio.wait_for(
-                loop.run_in_executor(None, transcribe_sync),
-                timeout=self.timeout_seconds
-            )
-            return result
-            
-        except asyncio.TimeoutError:
-            logger.error("Transcription timeout")
-            return "", "unknown"
-        except Exception as e:
-            logger.error(f"Transcription failed: {e}")
-            return "", "unknown"
+            segments, info = self.model.transcribe(temp_audio_path, **transcribe_kwargs)
+            return self._segments_to_result(segments, info)
         finally:
             if temp_audio_path and os.path.exists(temp_audio_path):
                 try:
@@ -104,7 +126,35 @@ class FasterWhisperTranscriber:
                 except Exception:
                     pass
 
+    @staticmethod
+    def _segments_to_result(segments, info) -> tuple:
+        transcript = "\n".join(
+            seg.text.strip() for seg in segments if seg.text and seg.text.strip()
+        ).strip()
+        raw = getattr(info, "language", None) if info is not None else None
+        if isinstance(raw, str) and raw.strip():
+            detected_language = raw.strip()
+        else:
+            detected_language = "unknown"
+        return transcript, detected_language
 
+    async def transcribe(self, audio_data: bytes) -> tuple:
+        if not self.model or len(audio_data) < 5000:
+            return "", "unknown"
+
+        loop = asyncio.get_running_loop()
+        try:
+            result = await asyncio.wait_for(
+                loop.run_in_executor(None, self._transcribe_sync, audio_data),
+                timeout=self.timeout_seconds
+            )
+            return result
+        except asyncio.TimeoutError:
+            logger.error("Transcription timeout")
+            return "", "unknown"
+        except Exception as e:
+            logger.error(f"Transcription failed: {e}")
+            return "", "unknown"
 
 
 def create_transcriber(transcriber_type: str, **kwargs):
