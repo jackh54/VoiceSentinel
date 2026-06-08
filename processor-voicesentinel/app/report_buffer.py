@@ -96,10 +96,12 @@ def report_buffer_append(
     if rb.get("save_audio") and audio_wav:
         try:
             safe = re.sub(r"[^a-zA-Z0-9_]", "_", str(record.get("player", "unknown")))[:32]
+            safe_session = re.sub(r"[^a-zA-Z0-9_-]", "_", str(record.get("session_id", "")))[:48]
             ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
             audio_dir = path.parent / "audio"
             audio_dir.mkdir(parents=True, exist_ok=True)
-            (audio_dir / f"{ts}_{safe}.wav").write_bytes(audio_wav)
+            suffix = f"{ts}_{safe}_{safe_session}.wav" if safe_session else f"{ts}_{safe}.wav"
+            (audio_dir / suffix).write_bytes(audio_wav)
         except OSError as e:
             logger.warning("report_buffer audio save failed: %s", e)
 
@@ -159,11 +161,16 @@ def _maybe_cleanup(root: Path, fp: str, server_key: str, retention_seconds: floa
 async def _rate_ok(bucket: Dict[str, List[float]], key: str, limit: int) -> bool:
     now = time.time()
     async with _evidence_lock:
-        lst = bucket.setdefault(key, [])
-        lst[:] = [t for t in lst if now - t < 60.0]
+        lst = bucket.get(key, [])
+        lst = [t for t in lst if now - t < 60.0]
+        if not lst:
+            bucket.pop(key, None)
         if len(lst) >= limit:
+            if lst:
+                bucket[key] = lst
             return False
         lst.append(now)
+        bucket[key] = lst
         return True
 
 
@@ -270,6 +277,9 @@ def query_report_audio(
     pq = sanitize_player_query(player_query)
     if not pq:
         return None
+    sid = (session_id or "").strip()
+    if not sid:
+        return None
 
     root = Path(rb.get("path", "report_buffer/"))
     skp = server_key_partition(server_key_for_partition)
@@ -278,7 +288,10 @@ def query_report_audio(
         return None
 
     safe_player = re.sub(r"[^a-zA-Z0-9_]", "_", pq)[:32]
-    candidates = sorted(audio_dir.glob(f"*_{safe_player}.wav"), reverse=True)
+    safe_session = re.sub(r"[^a-zA-Z0-9_-]", "_", sid)[:48]
+    candidates = sorted(audio_dir.glob(f"*_{safe_player}_{safe_session}.wav"), reverse=True)
+    if not candidates:
+        candidates = sorted(audio_dir.glob(f"*_{safe_player}.wav"), reverse=True)
     if not candidates:
         return None
     return candidates[0].read_bytes()

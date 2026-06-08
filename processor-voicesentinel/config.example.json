@@ -66,7 +66,6 @@
     "enabled": false,
     "path": "report_buffer/",
     "retention_seconds": 604800,
-    "save_audio": false,
-    "_comment": "When enabled, transcripts go to report_buffer/<license_sha256>/<server_key_sha256>/ using the WebSocket auth server_key. GET /report/evidence needs X-License-Key and X-Server-Key when server.server_key is set (plugin sends pool key in PUBLIC mode). If enabled is false, /report/evidence returns 404."
+    "save_audio": false
   }
 }

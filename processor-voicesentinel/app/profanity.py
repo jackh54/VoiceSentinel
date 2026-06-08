@@ -28,8 +28,8 @@ class ProfanityFilter:
                 compiled_pattern = re.compile(pattern, flags)
                 patterns.append(compiled_pattern)
                 pattern_to_word[compiled_pattern] = word
-            except Exception:
-                pass
+            except re.error as e:
+                logger.warning("Invalid profanity pattern skipped (%r): %s", word, e)
         return patterns, pattern_to_word
     
     def check_text(self, text: str) -> List[str]:

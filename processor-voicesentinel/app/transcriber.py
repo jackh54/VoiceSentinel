@@ -54,6 +54,11 @@ class FasterWhisperTranscriber:
         self.beam_size = max(1, int(transcription.get("beam_size", 5)))
         self.vad_filter = bool(transcription.get("vad_filter", True))
         self.use_memory_input = bool(transcription.get("use_memory_input", False))
+        audio_cfg = self.config.get("audio", {})
+        min_ms = int(audio_cfg.get("min_audio_length_ms", 50))
+        sample_rate = int(audio_cfg.get("sample_rate", TARGET_SAMPLE_RATE))
+        channels = int(audio_cfg.get("channels", 1))
+        self._min_audio_bytes = 44 + int(min_ms * (sample_rate * channels * 2) / 1000.0)
 
     def _load_model(self):
         try:
@@ -139,7 +144,7 @@ class FasterWhisperTranscriber:
         return transcript, detected_language
 
     async def transcribe(self, audio_data: bytes) -> tuple:
-        if not self.model or len(audio_data) < 5000:
+        if not self.model or len(audio_data) < self._min_audio_bytes:
             return "", "unknown"
 
         loop = asyncio.get_running_loop()

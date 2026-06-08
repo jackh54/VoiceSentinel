@@ -18,6 +18,7 @@ class ConfigValidator:
         self._validate_audio(config)
         self._validate_processing(config)
         self._validate_report_buffer(config)
+        self._validate_llm_profanity(config)
         return len(self.errors) == 0, self.errors, []
     
     def _validate_server(self, config: Dict[str, Any]):
@@ -28,6 +29,12 @@ class ConfigValidator:
         port = server.get("port", 28472)
         if not isinstance(port, int) or port < 1 or port > 65535:
             self.errors.append(f"Invalid port: {port}")
+        if not config.get("pool_server"):
+            server_key = server.get("server_key", "")
+            if not isinstance(server_key, str) or not server_key.strip():
+                self.errors.append(
+                    "server.server_key is required for non-pool processors (non-empty string)"
+                )
 
     def _validate_pool_server(self, config: Dict[str, Any]):
         if "pool_server" not in config:
@@ -35,6 +42,14 @@ class ConfigValidator:
         ps = config.get("pool_server")
         if not isinstance(ps, bool):
             self.errors.append(f"pool_server must be a boolean, got: {type(ps).__name__}")
+            return
+        if ps is True:
+            server_key = (config.get("server") or {}).get("server_key", "")
+            if not isinstance(server_key, str) or not server_key.strip():
+                self.errors.append(
+                    "pool_server requires server.server_key in config.json on the host "
+                    "(must match the plugin pool auth key; config.json is not committed to git)"
+                )
         log_path = config.get("pool_server_audit_log")
         if log_path is not None and not isinstance(log_path, str):
             self.errors.append(f"pool_server_audit_log must be a string, got: {type(log_path).__name__}")
@@ -136,6 +151,27 @@ class ConfigValidator:
             self.errors.append(
                 f"report_buffer.retention_seconds must be an integer, got: {type(rs_raw).__name__}"
             )
+
+    def _validate_llm_profanity(self, config: Dict[str, Any]):
+        llm = config.get("llm_profanity")
+        if llm is None:
+            return
+        if not isinstance(llm, dict):
+            self.errors.append(f"llm_profanity must be an object, got: {type(llm).__name__}")
+            return
+        if not llm.get("enabled"):
+            return
+        provider = llm.get("provider", "openai")
+        if not isinstance(provider, str):
+            self.errors.append("llm_profanity.provider must be a string")
+            return
+        if provider.lower().strip() not in ("openai", "anthropic", "ollama"):
+            self.errors.append(
+                "llm_profanity.provider must be one of: openai, anthropic, ollama"
+            )
+        strictness = llm.get("strictness", "medium")
+        if strictness is not None and strictness not in ("strict", "medium", "lenient"):
+            self.errors.append("llm_profanity.strictness must be strict, medium, or lenient")
 
 def validate_config(config: Dict[str, Any]) -> Dict[str, Any]:
     validator = ConfigValidator()

@@ -17,7 +17,18 @@ class LLMProfanityDetector:
     def __init__(self, config: dict):
         self.config = config.get("llm_profanity", {})
         self.enabled = self.config.get("enabled", False)
-        self.provider = LLMProvider(self.config.get("provider", "openai"))
+        provider_raw = self.config.get("provider", "openai")
+        if not isinstance(provider_raw, str):
+            provider_raw = "openai"
+        try:
+            self.provider = LLMProvider(provider_raw.lower().strip())
+        except ValueError:
+            logger.error(
+                "Invalid llm_profanity.provider '%s' — must be openai, anthropic, or ollama. LLM disabled.",
+                provider_raw,
+            )
+            self.enabled = False
+            self.provider = LLMProvider.OPENAI
         self.api_key = self.config.get("api_key", "")
         self.model = self.config.get("model", "gpt-3.5-turbo")
         default_timeout = 15 if self.provider == LLMProvider.OLLAMA else 5
@@ -223,9 +234,9 @@ class LLMProfanityDetector:
     
     def _get_system_prompt(self) -> str:
         strictness_instructions = {
-            "strict": "Only flag severe profanity, hate speech, or threats. Ignore mild language.",
-            "medium": "Flag profanity, hate speech, threats, and clearly inappropriate content.",
-            "lenient": "Flag only obvious profanity and serious violations."
+            "strict": "Flag profanity, hate speech, threats, and clearly inappropriate content.",
+            "medium": "Flag clear profanity and inappropriate content; ignore borderline cases.",
+            "lenient": "Only flag severe profanity, hate speech, or threats. Ignore mild language.",
         }
         instruction = strictness_instructions.get(self.strictness, strictness_instructions["medium"])
         return f"Moderate content. {instruction} Respond ONLY with JSON: {{\"is_profane\":bool,\"confidence\":0.0-1.0,\"reason\":\"brief\"}}"

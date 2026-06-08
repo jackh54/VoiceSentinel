@@ -44,7 +44,13 @@ logging.getLogger("huggingface_hub.file_download").setLevel(logging.INFO)
 
 logger = logging.getLogger(__name__)
 
-VERSION = "3.2.1"
+VERSION = "3.3.0"
+
+
+def effective_server_key(cfg: dict) -> str:
+    """Auth key from processor config (config.json on the host — not committed to git)."""
+    raw = (cfg.get("server") or {}).get("server_key", "")
+    return raw.strip() if isinstance(raw, str) else ""
 
 
 def license_from_auth_payload(data: dict) -> tuple[str, str]:
@@ -81,16 +87,34 @@ def _normalize_language_code(code) -> str:
     return s
 
 
+def _coerce_word_list(value) -> list:
+    if isinstance(value, list):
+        return list(value)
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    return []
+
+
 def _language_entry_lists(inner: dict) -> Tuple[list, list]:
     if not isinstance(inner, dict):
         return [], []
     prof = inner.get("PROFANITY") or inner.get("profanity") or []
     mute = inner.get("MUTE") or inner.get("mute") or []
-    if not isinstance(prof, list):
-        prof = list(prof) if prof else []
-    if not isinstance(mute, list):
-        mute = list(mute) if mute else []
-    return list(prof), list(mute)
+    return _coerce_word_list(prof), _coerce_word_list(mute)
+
+
+def _wav_bytes_per_ms(config: dict) -> float:
+    audio = config.get("audio", {})
+    sample_rate = int(audio.get("sample_rate", 16000))
+    channels = int(audio.get("channels", 1))
+    return (sample_rate * channels * 2) / 1000.0
+
+
+def _estimate_duration_ms(audio_data: bytes, config: dict) -> float:
+    bpm = _wav_bytes_per_ms(config)
+    if bpm <= 0:
+        return 0.0
+    return max(0.0, (len(audio_data) - 44) / bpm)
 
 
 def _resolve_per_language_lists(
@@ -225,12 +249,15 @@ class WebSocketManager:
         self.console_status = None
         self._processing_queue = None
         self._worker_tasks = []
+        self._stt_semaphore = None
+        self._console_update_task = None
     
     async def initialize(self, config):
         self.config = config
         self.console_status = ConsoleStatus(config)
         queue_max = config.get("processing", {}).get("queue_max_size", 500)
         self._processing_queue = asyncio.Queue(maxsize=max(1, queue_max))
+        self._stt_semaphore = asyncio.Semaphore(1)
         worker_count = config.get("processing", {}).get("worker_count", 1)
         try:
             worker_count = max(1, int(worker_count))
@@ -329,7 +356,21 @@ class WebSocketManager:
     
     def _max_buffer_bytes(self) -> int:
         max_ms = self.config.get("audio", {}).get("max_audio_length_ms", 30000)
-        return 44 + int((max_ms * 32))
+        return 44 + int(max_ms * _wav_bytes_per_ms(self.config))
+
+    async def _send_processing_error(
+        self,
+        client_id: str,
+        player_name: Optional[str],
+        session_id: Optional[str],
+        reason: str,
+    ) -> None:
+        await self.send_message(client_id, {
+            "type": "processing_error",
+            "reason": reason,
+            "player": player_name or client_id,
+            "session_id": session_id or client_id,
+        })
     
     async def process_audio(self, client_id: str, audio_data: bytes, profanity_words: list, player_name: str = None, session_id: str = None, language_word_lists: dict = None):
         try:
@@ -400,7 +441,8 @@ class WebSocketManager:
             except asyncio.QueueFull:
                 logger.warning(f"Processing queue full, dropping recording for client {client_id}")
                 fp = self.get_license_fingerprint(client_id)
-                pool_audit_emit(
+                await asyncio.to_thread(
+                    pool_audit_emit,
                     self.config,
                     "queue_drop",
                     client_id,
@@ -409,16 +451,8 @@ class WebSocketManager:
                     player=player_name,
                     session_id=session_id or client_id,
                 )
-                await self.send_message(client_id, {
-                    "type": "final_transcript",
-                    "transcript": "",
-                    "flagged": False,
-                    "bad_words": [],
-                    "player": player_name or client_id,
-                    "session_id": session_id or client_id,
-                    "processing_time_ms": 0,
-                    "detected_language": "unknown"
-                })
+                await self._send_processing_error(
+                    client_id, player_name, session_id, "queue_full")
         except Exception as e:
             logger.error(f"Audio processing failed: {e}")
     
@@ -431,7 +465,7 @@ class WebSocketManager:
         except Exception as e:
             logger.warning(f"Failed to cleanup old recordings: {e}")
     
-    async def _save_recording(self, audio_data: bytes, player_name: str, flagged: bool, transcript: str):
+    def _save_recording_sync(self, audio_data: bytes, player_name: str, flagged: bool, transcript: str):
         try:
             recordings_config = self.config.get("recordings", {})
             save_mode = recordings_config.get("save_mode", "none")
@@ -462,9 +496,9 @@ class WebSocketManager:
             if len(audio_data) < 1000:
                 return False
             audio_config = self.config.get("audio", {})
-            min_duration = audio_config.get("min_audio_length_ms", 500)
+            min_duration = audio_config.get("min_audio_length_ms", 50)
             max_duration = audio_config.get("max_audio_length_ms", 30000)
-            estimated_duration_ms = (len(audio_data) - 44) / 32
+            estimated_duration_ms = _estimate_duration_ms(audio_data, self.config)
             if estimated_duration_ms < min_duration:
                 return False
             if estimated_duration_ms > max_duration:
@@ -495,10 +529,11 @@ class WebSocketManager:
             
             transcription_timeout = self.config.get("transcription", {}).get("timeout_seconds", 30)
             stt_start = time.monotonic()
-            transcript, detected_language = await asyncio.wait_for(
-                self.transcriber.transcribe(audio_data),
-                timeout=float(transcription_timeout)
-            )
+            async with self._stt_semaphore:
+                transcript, detected_language = await asyncio.wait_for(
+                    self.transcriber.transcribe(audio_data),
+                    timeout=float(transcription_timeout)
+                )
             stt_time_ms = max(0, int((time.monotonic() - stt_start) * 1000))
 
             if client_id not in self.active_connections:
@@ -612,25 +647,23 @@ class WebSocketManager:
             if self.config.get("pool_server"):
                 fp = self.get_license_fingerprint(client_id)
                 lk = self.get_license_plain(client_id)
-                pool_transcript_append(
-                    self.config,
-                    fp,
-                    lk,
-                    {
-                        "event": "transcript",
-                        "ts": datetime.now(timezone.utc).isoformat(),
-                        "client_id": client_id,
-                        "player": actual_player_name,
-                        "session_id": actual_session_id,
-                        "transcript": transcript or "",
-                        "flagged": is_profane or should_mute,
-                        "should_mute": should_mute,
-                        "detected_language": detected_language,
-                        "processing_time_ms": processing_time_ms,
-                    },
-                )
+                pool_record = {
+                    "event": "transcript",
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "client_id": client_id,
+                    "player": actual_player_name,
+                    "session_id": actual_session_id,
+                    "transcript": transcript or "",
+                    "flagged": is_profane or should_mute,
+                    "should_mute": should_mute,
+                    "detected_language": detected_language,
+                    "processing_time_ms": processing_time_ms,
+                }
+                await asyncio.to_thread(
+                    pool_transcript_append, self.config, fp, lk, pool_record)
                 if is_profane or should_mute:
-                    pool_audit_emit(
+                    await asyncio.to_thread(
+                        pool_audit_emit,
                         self.config,
                         "transcription_flagged",
                         client_id,
@@ -642,12 +675,19 @@ class WebSocketManager:
                         mute_hits=len(mute_flagged_words),
                         llm_flagged=bool(llm_flagged),
                     )
-            await self._save_recording(audio_data, actual_player_name, is_profane, transcript or "")
+            await asyncio.to_thread(
+                self._save_recording_sync, audio_data, actual_player_name, is_profane, transcript or "")
             
         except asyncio.TimeoutError:
             logger.error(f"Processing timeout after {transcription_timeout}s")
+            if client_id in self.active_connections:
+                await self._send_processing_error(
+                    client_id, player_name, session_id, "timeout")
         except Exception as e:
             logger.error(f"Processing failed: {e}")
+            if client_id in self.active_connections:
+                await self._send_processing_error(
+                    client_id, player_name, session_id, "processing_failed")
         finally:
             self.console_status.decrement_processing()
     
@@ -695,14 +735,24 @@ async def lifespan(app: FastAPI):
         Path(config.get("pool_server_transcripts_dir", "logs/pool_transcripts_by_license")).mkdir(
             parents=True, exist_ok=True
         )
+        logger.info(
+            "Public pool processor: set server.server_key in config.json "
+            "(gitignored) to match the plugin pool auth key"
+        )
     rb_path = (config.get("report_buffer") or {}).get("path", "report_buffer/")
     if rb_path:
         Path(rb_path).mkdir(parents=True, exist_ok=True)
     await ws_manager.initialize(config)
     if ws_manager.console_status:
         ws_manager.console_status.print_status(force=True)
-    asyncio.create_task(console_update_task())
+    ws_manager._console_update_task = asyncio.create_task(console_update_task())
     yield
+    if ws_manager._console_update_task is not None:
+        ws_manager._console_update_task.cancel()
+        try:
+            await ws_manager._console_update_task
+        except asyncio.CancelledError:
+            pass
     for task in ws_manager._worker_tasks:
         task.cancel()
     for task in ws_manager._worker_tasks:
@@ -764,9 +814,9 @@ async def report_evidence(
         client_ip = ""
     if not await check_evidence_rate_limits(fp_ev, client_ip):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
-    cfg_key = (config.get("server") or {}).get("server_key") or ""
+    cfg_key = effective_server_key(config)
     sk_for_query = ""
-    if isinstance(cfg_key, str) and cfg_key.strip():
+    if cfg_key:
         req_key = request.headers.get("x-server-key") or ""
         if req_key != cfg_key:
             raise HTTPException(status_code=401, detail="Invalid server key")
@@ -777,7 +827,8 @@ async def report_evidence(
     if not pq:
         raise HTTPException(status_code=400, detail="Invalid player parameter")
     sec = sanitize_seconds_seconds(seconds)
-    events = query_report_evidence(config, fp_ev, sk_for_query, pq, sec)
+    events = await asyncio.to_thread(
+        query_report_evidence, config, fp_ev, sk_for_query, pq, sec)
     return {"events": events}
 
 
@@ -810,11 +861,20 @@ async def report_audio(
         client_ip = ""
     if not await check_evidence_rate_limits(fp_ev, client_ip):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
-    sk_for_query = request.headers.get("x-server-key") or ""
+    cfg_key = effective_server_key(config)
+    sk_for_query = ""
+    if cfg_key:
+        req_key = request.headers.get("x-server-key") or ""
+        if req_key != cfg_key:
+            raise HTTPException(status_code=401, detail="Invalid server key")
+        sk_for_query = req_key
+    else:
+        sk_for_query = request.headers.get("x-server-key") or ""
     pq = sanitize_player_query(player)
     if not pq:
         raise HTTPException(status_code=400, detail="Invalid player parameter")
-    wav = query_report_audio(config, fp_ev, sk_for_query, pq, session_id)
+    wav = await asyncio.to_thread(
+        query_report_audio, config, fp_ev, sk_for_query, pq, session_id)
     if not wav:
         raise HTTPException(status_code=404, detail="Audio not found")
     return RawResponse(content=wav, media_type="audio/wav")
@@ -849,7 +909,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
             
             if message_type == "auth":
                 server_key = data.get("server_key", "")
-                config_key = config.get("server", {}).get("server_key", "")
+                expected_key = effective_server_key(config)
 
                 fingerprint, license_plain = license_from_auth_payload(data)
 
@@ -860,7 +920,25 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                 except Exception:
                     remote_ip = ""
 
-                if not config_key or server_key == config_key:
+                if not expected_key:
+                    pool_audit_emit(
+                        config,
+                        "auth_failed",
+                        client_id,
+                        fingerprint,
+                        license_key=license_plain,
+                        remote_ip=remote_ip,
+                        reason="server_key_not_configured",
+                    )
+                    await ws_manager.send_message(client_id, {
+                        "type": "auth_failed",
+                        "reason": "Processor server key not configured",
+                    })
+                    await websocket.close()
+                    ws_manager.disconnect(client_id, skip_pool_disconnect_audit=True)
+                    return
+
+                if server_key == expected_key:
                     authenticated = True
                     ws_manager.set_client_license(client_id, fingerprint, license_plain)
                     ws_manager.set_auth_server_key(
