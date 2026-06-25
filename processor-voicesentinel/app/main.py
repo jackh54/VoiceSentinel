@@ -44,7 +44,7 @@ logging.getLogger("huggingface_hub.file_download").setLevel(logging.INFO)
 
 logger = logging.getLogger(__name__)
 
-VERSION = "3.3.0"
+VERSION = "3.3.1"
 
 
 def effective_server_key(cfg: dict) -> str:
