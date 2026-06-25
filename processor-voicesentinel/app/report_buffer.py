@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import re
 import time
 from datetime import datetime, timezone
@@ -12,6 +13,8 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 _last_cleanup: Dict[str, float] = {}
 _CLEANUP_INTERVAL = 3600.0  # run at most once per hour per tenant
+_tenant_locks: Dict[str, asyncio.Lock] = {}
+_tenant_locks_guard = asyncio.Lock()
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +109,19 @@ def report_buffer_append(
             logger.warning("report_buffer audio save failed: %s", e)
 
 
+def _atomic_rewrite_jsonl(path: Path, lines: List[str]) -> None:
+    """Rewrite a JSONL file atomically via temp file + os.replace."""
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            for line in lines:
+                f.write(line + "\n")
+        os.replace(tmp, path)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
 def _cleanup_tenant(tenant_dir: Path, retention_seconds: float) -> None:
     """Delete transcript lines and audio files older than retention_seconds."""
     cutoff = time.time() - retention_seconds
@@ -131,9 +147,7 @@ def _cleanup_tenant(tenant_dir: Path, retention_seconds: float) -> None:
                         ts_sec = cutoff + 1  # keep lines with unparseable timestamps
                     if ts_sec >= cutoff:
                         kept.append(line)
-            with open(transcript_path, "w", encoding="utf-8") as f:
-                for line in kept:
-                    f.write(line + "\n")
+            _atomic_rewrite_jsonl(transcript_path, kept)
         except OSError as e:
             logger.warning("report_buffer retention cleanup (transcripts) failed: %s", e)
 
@@ -297,6 +311,26 @@ def query_report_audio(
     return candidates[0].read_bytes()
 
 
+async def _get_tenant_lock(tenant_key: str) -> asyncio.Lock:
+    async with _tenant_locks_guard:
+        lock = _tenant_locks.get(tenant_key)
+        if lock is None:
+            lock = asyncio.Lock()
+            _tenant_locks[tenant_key] = lock
+        return lock
+
+
+def _tenant_key(cfg: dict, license_fingerprint: str, server_key: str) -> Optional[str]:
+    rb = cfg.get("report_buffer") or {}
+    if not rb.get("enabled"):
+        return None
+    fp = _sanitize_fingerprint(license_fingerprint or "")
+    if not fp:
+        return None
+    root = Path(rb.get("path", "report_buffer/"))
+    return str(_tenant_transcript_path(root, fp, server_key).parent)
+
+
 async def report_buffer_append_async(
     cfg: dict,
     license_fingerprint: str,
@@ -304,4 +338,11 @@ async def report_buffer_append_async(
     record: Dict[str, Any],
     audio_wav: Optional[bytes] = None,
 ) -> None:
-    await asyncio.to_thread(report_buffer_append, cfg, license_fingerprint, server_key, record, audio_wav)
+    tenant_key = _tenant_key(cfg, license_fingerprint, server_key)
+    if tenant_key is None:
+        return
+    lock = await _get_tenant_lock(tenant_key)
+    async with lock:
+        await asyncio.to_thread(
+            report_buffer_append, cfg, license_fingerprint, server_key, record, audio_wav
+        )

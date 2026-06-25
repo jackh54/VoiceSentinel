@@ -164,7 +164,10 @@ See LICENSE file for details.
 
 ## Roadmap
 
-### Version 3.3.0 (Current)
+### Version 3.3.1 (Current)
+- Fix race condition in report buffer cleanup that could corrupt transcript data and cause unbounded disk growth
+
+### Version 3.3.0
 - Migrated to Faster Whisper large-v3 model
 - Multi-language support with auto-detection
 - Recording save functionality
