@@ -4,15 +4,19 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import re
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from app.storage import get_storage, storage_key
+from app.storage import LocalFilesystemStore, get_storage, storage_key
 
 _last_cleanup: Dict[str, float] = {}
 _CLEANUP_INTERVAL = 3600.0
+
+_tenant_write_locks: Dict[str, asyncio.Lock] = {}
+_tenant_write_locks_guard = asyncio.Lock()
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +51,19 @@ def _tenant_transcript_key(root: str, license_fp: str, server_key: str) -> str:
 
 def _legacy_transcript_key(root: str, license_fp: str) -> str:
     return storage_key(root, license_fp, "transcripts.jsonl")
+
+
+def _tenant_dir_key(root: str, license_fp: str, server_key: str) -> str:
+    return storage_key(root, license_fp, server_key_partition(server_key))
+
+
+async def _get_tenant_write_lock(tenant_dir_key: str) -> asyncio.Lock:
+    async with _tenant_write_locks_guard:
+        lock = _tenant_write_locks.get(tenant_dir_key)
+        if lock is None:
+            lock = asyncio.Lock()
+            _tenant_write_locks[tenant_dir_key] = lock
+        return lock
 
 
 def sanitize_player_query(name: str) -> Optional[str]:
@@ -103,6 +120,22 @@ def report_buffer_append(
             logger.warning("report_buffer audio save failed: %s", e)
 
 
+def _rewrite_transcript_lines(store, transcript_key: str, kept: List[str]) -> None:
+    new_content = "\n".join(kept) + ("\n" if kept else "")
+    if isinstance(store, LocalFilesystemStore):
+        path = store._path(transcript_key)
+        tmp_path = path.parent / f".{path.name}.tmp"
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path.write_text(new_content, encoding="utf-8")
+            os.replace(tmp_path, path)
+        except OSError:
+            tmp_path.unlink(missing_ok=True)
+            raise
+    else:
+        store.write_text(transcript_key, new_content)
+
+
 def _cleanup_tenant(
     store,
     root: str,
@@ -129,22 +162,28 @@ def _cleanup_tenant(
                 ts_sec = cutoff + 1
             if ts_sec >= cutoff:
                 kept.append(line)
-        store.write_text(transcript_key, "\n".join(kept) + ("\n" if kept else ""))
+        try:
+            _rewrite_transcript_lines(store, transcript_key, kept)
+        except OSError as e:
+            logger.warning("report_buffer retention cleanup (transcripts) failed: %s", e)
 
     audio_prefix = storage_key(root, *tenant_parts, "audio")
-    for audio_key in store.list_keys(audio_prefix, suffix=".wav"):
-        mtime = store.get_mtime(audio_key)
-        if mtime is not None and mtime < cutoff:
-            store.delete(audio_key)
+    try:
+        for audio_key in store.list_keys(audio_prefix, suffix=".wav"):
+            mtime = store.get_mtime(audio_key)
+            if mtime is not None and mtime < cutoff:
+                store.delete(audio_key)
+    except OSError as e:
+        logger.warning("report_buffer retention cleanup (audio) failed: %s", e)
 
 
 def _maybe_cleanup(store, root: str, fp: str, server_key: str, retention_seconds: float) -> None:
-    skp = server_key_partition(server_key)
-    cleanup_key = storage_key(root, fp, skp)
+    cleanup_key = _tenant_dir_key(root, fp, server_key)
     now = time.time()
     if now - _last_cleanup.get(cleanup_key, 0.0) < _CLEANUP_INTERVAL:
         return
     _last_cleanup[cleanup_key] = now
+    skp = server_key_partition(server_key)
     _cleanup_tenant(store, root, (fp, skp), retention_seconds)
 
 
@@ -235,7 +274,7 @@ def query_report_evidence(
 
     primary = _tenant_transcript_key(root, fp, server_key_for_partition)
     legacy = _legacy_transcript_key(root, fp)
-    seen: Set[Tuple[str, str, str]] = set()
+    seen: Set[Tuple[str, str, str, str]] = set()
     merged: List[Dict[str, Any]] = []
     for key in (primary, legacy):
         for row in _read_evidence_file(store, key, pl, cutoff):
@@ -303,4 +342,16 @@ async def report_buffer_append_async(
     record: Dict[str, Any],
     audio_wav: Optional[bytes] = None,
 ) -> None:
-    await asyncio.to_thread(report_buffer_append, cfg, license_fingerprint, server_key, record, audio_wav)
+    rb = cfg.get("report_buffer") or {}
+    if not rb.get("enabled"):
+        return
+    fp = _sanitize_fingerprint(license_fingerprint or "")
+    if not fp:
+        return
+    root = rb.get("path", "report_buffer/")
+    tenant_key = _tenant_dir_key(root, fp, server_key)
+    lock = await _get_tenant_write_lock(tenant_key)
+    async with lock:
+        await asyncio.to_thread(
+            report_buffer_append, cfg, license_fingerprint, server_key, record, audio_wav
+        )

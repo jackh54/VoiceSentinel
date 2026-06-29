@@ -8,7 +8,7 @@ from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
-_storage_backends: dict[str, StorageBackend] = {}
+_storage_backend: Optional["StorageBackend"] = None
 
 
 def r2_storage_configured() -> bool:

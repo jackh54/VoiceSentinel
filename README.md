@@ -170,7 +170,10 @@ See LICENSE file for details.
 
 ## Roadmap
 
-### Version 3.3.0 (Current)
+### Version 3.3.1 (Current)
+- Fix race condition in report buffer retention cleanup (GHSA-vhqx-3242-77j7)
+
+### Version 3.3.0
 - Migrated to Faster Whisper large-v3 model
 - Multi-language support with auto-detection
 - Recording save functionality
