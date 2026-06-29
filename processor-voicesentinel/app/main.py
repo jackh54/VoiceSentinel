@@ -17,7 +17,8 @@ from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from app.transcriber import create_transcriber
 from app.profanity import ProfanityFilter
-from app.config_validator import validate_config, ConfigValidationError
+from app.config_loader import load_config
+from app.storage import init_storage, get_storage, storage_key
 from app.llm_profanity import LLMProfanityDetector
 from app.console_status import ConsoleStatus
 from app.pool_audit import setup_pool_audit, pool_audit_emit, pool_transcript_append
@@ -144,96 +145,6 @@ def _resolve_per_language_lists(
     return [], [], None
 
 
-def load_config():
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.dirname(script_dir)
-    default_local_path = os.path.join(project_root, 'config.json')
-    config_path = os.environ.get('CONFIG_PATH', default_local_path)
-    
-    try:
-        with open(config_path, 'r') as f:
-            config = json.load(f)
-        config_clean = {k: v for k, v in config.items() if not k.startswith('_')}
-        validate_config(config_clean)
-        return config_clean
-    except FileNotFoundError:
-        default_config = get_default_config()
-        validate_config(default_config)
-        try:
-            Path(config_path).parent.mkdir(parents=True, exist_ok=True)
-            with open(config_path, 'w') as f:
-                json.dump(default_config, f, indent=2)
-            logger.info(f"Created default config at {config_path}")
-        except OSError as e:
-            logger.warning(f"Could not write default config to {config_path}: {e}")
-        return default_config
-    except json.JSONDecodeError as e:
-        logger.error(f"Invalid JSON in config file: {e}")
-        raise
-    except ConfigValidationError as e:
-        logger.error(f"Configuration validation failed: {e}")
-        raise
-
-def get_default_config():
-    return {
-        "server": {"host": "0.0.0.0", "port": 28472, "server_key": ""},
-        "transcription": {
-            "model": "Systran/faster-whisper-base",
-            "language": "en",
-            "device": "cpu",
-            "compute_type": "int8",
-            "timeout_seconds": 30,
-            "cpu_threads": 2,
-            "beam_size": 5,
-            "vad_filter": True,
-            "use_memory_input": False,
-            "huggingface_token": ""
-        },
-        "audio": {
-            "min_audio_length_ms": 50,
-            "max_audio_length_ms": 30000,
-            "sample_rate": 16000,
-            "channels": 1
-        },
-        "processing": {
-            "queue_max_size": 500,
-            "worker_count": 1
-        },
-        "recordings": {
-            "save_mode": "none",
-            "save_path": "recordings/",
-            "retention_days": 7
-        },
-        "response": {"include_audio": False},
-        "cors": {
-            "allow_origins": ["*"],
-            "allow_credentials": False,
-            "allow_methods": ["*"],
-            "allow_headers": ["*"]
-        },
-        "llm_profanity": {
-            "enabled": False,
-            "provider": "ollama",
-            "api_key": "http://localhost:11434",
-            "model": "llama2",
-            "timeout_seconds": 15,
-            "confidence_threshold": 0.7,
-            "strictness": "medium",
-            "max_concurrent_requests": 3,
-            "fallback_on_error": True
-        },
-        "console": {"log_transcripts": False, "live_display": True},
-        "pool_server": False,
-        "pool_server_audit_log": "logs/pooled_server_audit.jsonl",
-        "pool_server_transcripts_dir": "logs/pool_transcripts_by_license",
-        "report_buffer": {
-            "enabled": False,
-            "path": "report_buffer/",
-            "retention_seconds": 604800,
-            "save_audio": False,
-        },
-    }
-
 class WebSocketManager:
     def __init__(self):
         self.active_connections = {}
@@ -281,8 +192,8 @@ class WebSocketManager:
         recordings_config = config.get("recordings", {})
         save_mode = recordings_config.get("save_mode", "none")
         if save_mode != "none":
-            save_path = Path(recordings_config.get("save_path", "recordings/"))
-            save_path.mkdir(parents=True, exist_ok=True)
+            save_path = recordings_config.get("save_path", "recordings/")
+            get_storage().ensure_prefix(save_path)
             self._cleanup_old_recordings(save_path, recordings_config.get("retention_days", 7))
     
     async def connect(self, websocket: WebSocket, client_id: str):
@@ -456,12 +367,14 @@ class WebSocketManager:
         except Exception as e:
             logger.error(f"Audio processing failed: {e}")
     
-    def _cleanup_old_recordings(self, save_path: Path, retention_days: int):
+    def _cleanup_old_recordings(self, save_path: str, retention_days: int):
         try:
             cutoff = time.time() - (retention_days * 86400)
-            for file in save_path.glob("*.wav"):
-                if file.stat().st_mtime < cutoff:
-                    file.unlink()
+            store = get_storage()
+            for key in store.list_keys(save_path, suffix=".wav"):
+                mtime = store.get_mtime(key)
+                if mtime is not None and mtime < cutoff:
+                    store.delete(key)
         except Exception as e:
             logger.warning(f"Failed to cleanup old recordings: {e}")
     
@@ -473,21 +386,21 @@ class WebSocketManager:
             if save_mode == "none" or (save_mode == "flagged" and not flagged):
                 return
             
-            save_path = Path(recordings_config.get("save_path", "recordings/"))
+            save_path = recordings_config.get("save_path", "recordings/")
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"{timestamp}_{player_name}_{'flagged' if flagged else 'clean'}.wav"
             
-            audio_file = save_path / filename
-            audio_file.write_bytes(audio_data)
+            audio_key = storage_key(save_path, filename)
+            get_storage().write_bytes(audio_key, audio_data)
             
-            metadata_file = save_path / f"{filename}.json"
+            metadata_key = storage_key(save_path, f"{filename}.json")
             metadata = {
                 "timestamp": datetime.now().isoformat(),
                 "player": player_name,
                 "flagged": flagged,
                 "transcript": transcript
             }
-            metadata_file.write_text(json.dumps(metadata, indent=2))
+            get_storage().write_text(metadata_key, json.dumps(metadata, indent=2))
         except Exception as e:
             logger.error(f"Failed to save recording: {e}")
     
@@ -727,6 +640,7 @@ async def console_update_task():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    init_storage(".")
     setup_pool_audit(
         bool(config.get("pool_server", False)),
         config.get("pool_server_audit_log", "logs/pooled_server_audit.jsonl"),
@@ -741,7 +655,7 @@ async def lifespan(app: FastAPI):
         )
     rb_path = (config.get("report_buffer") or {}).get("path", "report_buffer/")
     if rb_path:
-        Path(rb_path).mkdir(parents=True, exist_ok=True)
+        get_storage().ensure_prefix(rb_path)
     await ws_manager.initialize(config)
     if ws_manager.console_status:
         ws_manager.console_status.print_status(force=True)

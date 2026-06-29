@@ -1,0 +1,41 @@
+{
+  "name": "voicesentinel-processor",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-04-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+  "containers": [
+    {
+      "class_name": "ProcessorContainer",
+      "image": "../Dockerfile",
+      "instance_type": "standard-4",
+      "max_instances": 1
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "PROCESSOR",
+        "class_name": "ProcessorContainer"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["ProcessorContainer"]
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "STORAGE",
+      "bucket_name": "voicesentinel-processor"
+    }
+  ],
+  "vars": {
+    "R2_BUCKET_NAME": "voicesentinel-processor",
+    "WHISPER_MODEL": "Systran/faster-whisper-base"
+  }
+}

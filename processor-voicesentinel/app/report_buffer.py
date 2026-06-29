@@ -7,11 +7,12 @@ import logging
 import re
 import time
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from app.storage import get_storage, storage_key
+
 _last_cleanup: Dict[str, float] = {}
-_CLEANUP_INTERVAL = 3600.0  # run at most once per hour per tenant
+_CLEANUP_INTERVAL = 3600.0
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +22,6 @@ _evidence_rate: Dict[str, List[float]] = {}
 _evidence_lock = asyncio.Lock()
 MAX_EVIDENCE_PER_MINUTE_PER_LICENSE = 60
 
-# Optional per-IP rate limit (abuse on shared pools)
 _evidence_ip_rate: Dict[str, List[float]] = {}
 MAX_EVIDENCE_PER_MINUTE_PER_IP = 120
 
@@ -36,18 +36,17 @@ def _sanitize_fingerprint(fp: str) -> Optional[str]:
 
 
 def server_key_partition(server_key: str) -> str:
-    """Stable 64-hex directory name from the same server_key string used in WebSocket auth."""
     raw = (server_key or "").strip()
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-def _tenant_transcript_path(root: Path, license_fp: str, server_key: str) -> Path:
+def _tenant_transcript_key(root: str, license_fp: str, server_key: str) -> str:
     skp = server_key_partition(server_key)
-    return root / license_fp / skp / "transcripts.jsonl"
+    return storage_key(root, license_fp, skp, "transcripts.jsonl")
 
 
-def _legacy_transcript_path(root: Path, license_fp: str) -> Path:
-    return root / license_fp / "transcripts.jsonl"
+def _legacy_transcript_key(root: str, license_fp: str) -> str:
+    return storage_key(root, license_fp, "transcripts.jsonl")
 
 
 def sanitize_player_query(name: str) -> Optional[str]:
@@ -84,78 +83,69 @@ def report_buffer_append(
     fp = _sanitize_fingerprint(license_fingerprint or "")
     if not fp:
         return
-    root = Path(rb.get("path", "report_buffer/"))
-    root.mkdir(parents=True, exist_ok=True)
+    root = rb.get("path", "report_buffer/")
+    store = get_storage()
     retention_seconds = float(rb.get("retention_seconds", 604800))
-    _maybe_cleanup(root, fp, server_key, retention_seconds)
-    path = _tenant_transcript_path(root, fp, server_key)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    _maybe_cleanup(store, root, fp, server_key, retention_seconds)
+    key = _tenant_transcript_key(root, fp, server_key)
+    store.ensure_prefix(storage_key(root, fp, server_key_partition(server_key)))
     line = json.dumps(record, separators=(",", ":"), ensure_ascii=False) + "\n"
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(line)
+    store.append_bytes(key, line.encode("utf-8"))
     if rb.get("save_audio") and audio_wav:
         try:
             safe = re.sub(r"[^a-zA-Z0-9_]", "_", str(record.get("player", "unknown")))[:32]
             safe_session = re.sub(r"[^a-zA-Z0-9_-]", "_", str(record.get("session_id", "")))[:48]
             ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
-            audio_dir = path.parent / "audio"
-            audio_dir.mkdir(parents=True, exist_ok=True)
             suffix = f"{ts}_{safe}_{safe_session}.wav" if safe_session else f"{ts}_{safe}.wav"
-            (audio_dir / suffix).write_bytes(audio_wav)
+            audio_key = storage_key(root, fp, server_key_partition(server_key), "audio", suffix)
+            store.write_bytes(audio_key, audio_wav)
         except OSError as e:
             logger.warning("report_buffer audio save failed: %s", e)
 
 
-def _cleanup_tenant(tenant_dir: Path, retention_seconds: float) -> None:
-    """Delete transcript lines and audio files older than retention_seconds."""
+def _cleanup_tenant(
+    store,
+    root: str,
+    tenant_parts: Tuple[str, ...],
+    retention_seconds: float,
+) -> None:
     cutoff = time.time() - retention_seconds
+    transcript_key = storage_key(root, *tenant_parts, "transcripts.jsonl")
+    lines = store.read_text_lines(transcript_key)
+    if lines:
+        kept = []
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            ts = obj.get("ts") or ""
+            try:
+                ts_sec = datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+            except (ValueError, TypeError):
+                ts_sec = cutoff + 1
+            if ts_sec >= cutoff:
+                kept.append(line)
+        store.write_text(transcript_key, "\n".join(kept) + ("\n" if kept else ""))
 
-    # Prune old lines from transcripts.jsonl
-    transcript_path = tenant_dir / "transcripts.jsonl"
-    if transcript_path.is_file():
-        try:
-            kept = []
-            with open(transcript_path, encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        obj = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    ts = obj.get("ts") or ""
-                    try:
-                        ts_sec = datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
-                    except (ValueError, TypeError):
-                        ts_sec = cutoff + 1  # keep lines with unparseable timestamps
-                    if ts_sec >= cutoff:
-                        kept.append(line)
-            with open(transcript_path, "w", encoding="utf-8") as f:
-                for line in kept:
-                    f.write(line + "\n")
-        except OSError as e:
-            logger.warning("report_buffer retention cleanup (transcripts) failed: %s", e)
-
-    # Delete old audio files
-    audio_dir = tenant_dir / "audio"
-    if audio_dir.is_dir():
-        try:
-            for wav in audio_dir.glob("*.wav"):
-                if wav.stat().st_mtime < cutoff:
-                    wav.unlink(missing_ok=True)
-        except OSError as e:
-            logger.warning("report_buffer retention cleanup (audio) failed: %s", e)
+    audio_prefix = storage_key(root, *tenant_parts, "audio")
+    for audio_key in store.list_keys(audio_prefix, suffix=".wav"):
+        mtime = store.get_mtime(audio_key)
+        if mtime is not None and mtime < cutoff:
+            store.delete(audio_key)
 
 
-def _maybe_cleanup(root: Path, fp: str, server_key: str, retention_seconds: float) -> None:
-    tenant_dir = _tenant_transcript_path(root, fp, server_key).parent
-    key = str(tenant_dir)
+def _maybe_cleanup(store, root: str, fp: str, server_key: str, retention_seconds: float) -> None:
+    skp = server_key_partition(server_key)
+    cleanup_key = storage_key(root, fp, skp)
     now = time.time()
-    if now - _last_cleanup.get(key, 0.0) < _CLEANUP_INTERVAL:
+    if now - _last_cleanup.get(cleanup_key, 0.0) < _CLEANUP_INTERVAL:
         return
-    _last_cleanup[key] = now
-    _cleanup_tenant(tenant_dir, retention_seconds)
+    _last_cleanup[cleanup_key] = now
+    _cleanup_tenant(store, root, (fp, skp), retention_seconds)
 
 
 async def _rate_ok(bucket: Dict[str, List[float]], key: str, limit: int) -> bool:
@@ -192,34 +182,31 @@ def _parse_ts_iso(s: str) -> Optional[float]:
         return None
 
 
-def _read_evidence_file(path: Path, pl: str, cutoff: float) -> List[Dict[str, Any]]:
+def _read_evidence_file(store, key: str, pl: str, cutoff: float) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
-    if not path.is_file():
-        return out
     try:
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    o = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if o.get("player", "").lower() != pl:
-                    continue
-                ts = o.get("ts") or ""
-                tsec = _parse_ts_iso(ts) if isinstance(ts, str) else None
-                if tsec is not None and tsec < cutoff:
-                    continue
-                out.append(
-                    {
-                        "ts": ts,
-                        "transcript": o.get("transcript", "") or "",
-                        "session_id": o.get("session_id", ""),
-                        "detected_language": o.get("detected_language", ""),
-                    }
-                )
+        for line in store.read_text_lines(key):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                o = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if o.get("player", "").lower() != pl:
+                continue
+            ts = o.get("ts") or ""
+            tsec = _parse_ts_iso(ts) if isinstance(ts, str) else None
+            if tsec is not None and tsec < cutoff:
+                continue
+            out.append(
+                {
+                    "ts": ts,
+                    "transcript": o.get("transcript", "") or "",
+                    "session_id": o.get("session_id", ""),
+                    "detected_language": o.get("detected_language", ""),
+                }
+            )
     except OSError as e:
         logger.warning("report evidence read failed: %s", e)
     return out
@@ -238,23 +225,29 @@ def query_report_evidence(
     fp = _sanitize_fingerprint(license_fingerprint or "")
     if not fp:
         return []
-    root = Path(rb.get("path", "report_buffer/"))
+    root = rb.get("path", "report_buffer/")
+    store = get_storage()
     cutoff = time.time() - float(seconds)
     pq = sanitize_player_query(player_query)
     if not pq:
         return []
     pl = pq.lower()
 
-    primary = _tenant_transcript_path(root, fp, server_key_for_partition)
-    legacy = _legacy_transcript_path(root, fp)
+    primary = _tenant_transcript_key(root, fp, server_key_for_partition)
+    legacy = _legacy_transcript_key(root, fp)
     seen: Set[Tuple[str, str, str]] = set()
     merged: List[Dict[str, Any]] = []
-    for path in (primary, legacy):
-        for row in _read_evidence_file(path, pl, cutoff):
-            key = (row.get("ts") or "", row.get("transcript") or "", row.get("session_id") or "", row.get("detected_language") or "")
-            if key in seen:
+    for key in (primary, legacy):
+        for row in _read_evidence_file(store, key, pl, cutoff):
+            dedupe = (
+                row.get("ts") or "",
+                row.get("transcript") or "",
+                row.get("session_id") or "",
+                row.get("detected_language") or "",
+            )
+            if dedupe in seen:
                 continue
-            seen.add(key)
+            seen.add(dedupe)
             merged.append(row)
     merged.sort(key=lambda r: r.get("ts") or "")
     return merged
@@ -267,7 +260,6 @@ def query_report_audio(
     player_query: str,
     session_id: str,
 ) -> Optional[bytes]:
-    """Return the most recent audio WAV matching the given player+session, or None."""
     rb = cfg.get("report_buffer") or {}
     if not rb.get("enabled") or not rb.get("save_audio"):
         return None
@@ -281,20 +273,27 @@ def query_report_audio(
     if not sid:
         return None
 
-    root = Path(rb.get("path", "report_buffer/"))
+    root = rb.get("path", "report_buffer/")
+    store = get_storage()
     skp = server_key_partition(server_key_for_partition)
-    audio_dir = root / fp / skp / "audio"
-    if not audio_dir.is_dir():
+    audio_prefix = storage_key(root, fp, skp, "audio")
+    if not store.is_dir(audio_prefix):
         return None
 
     safe_player = re.sub(r"[^a-zA-Z0-9_]", "_", pq)[:32]
     safe_session = re.sub(r"[^a-zA-Z0-9_-]", "_", sid)[:48]
-    candidates = sorted(audio_dir.glob(f"*_{safe_player}_{safe_session}.wav"), reverse=True)
+    candidates = sorted(
+        store.list_keys(audio_prefix, suffix=f"_{safe_player}_{safe_session}.wav"),
+        reverse=True,
+    )
     if not candidates:
-        candidates = sorted(audio_dir.glob(f"*_{safe_player}.wav"), reverse=True)
+        candidates = sorted(
+            store.list_keys(audio_prefix, suffix=f"_{safe_player}.wav"),
+            reverse=True,
+        )
     if not candidates:
         return None
-    return candidates[0].read_bytes()
+    return store.read_bytes(candidates[0])
 
 
 async def report_buffer_append_async(

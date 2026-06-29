@@ -17,6 +17,14 @@ RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
 COPY app/ ./app/
 RUN touch app/__init__.py 2>/dev/null || true
 
+ARG PREBAKE_WHISPER_MODEL=false
+ARG WHISPER_MODEL=Systran/faster-whisper-base
+ARG WHISPER_DEVICE=cpu
+ARG WHISPER_COMPUTE_TYPE=int8
+RUN if [ "$PREBAKE_WHISPER_MODEL" = "true" ]; then \
+    python3 -c "from faster_whisper import WhisperModel; WhisperModel('${WHISPER_MODEL}', device='${WHISPER_DEVICE}', compute_type='${WHISPER_COMPUTE_TYPE}')"; \
+    fi
+
 COPY config.example.json ./config.json
 
 ENV PYTHONUNBUFFERED=1

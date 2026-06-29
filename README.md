@@ -99,6 +99,12 @@ Recording save modes:
 - `all` - Save all recordings
 - `flagged` - Save only flagged recordings
 
+## Cloudflare Containers (managed alternative)
+
+Cloudflare Containers is an **optional** managed deployment path for the processor. Self-hosting via Docker Compose (above) remains the default and fully supported workflow — no config or behavior changes are required for existing installs.
+
+For prerequisites, secrets, R2 bindings, sizing, and deploy steps, see [processor-voicesentinel/cloudflare/README.md](processor-voicesentinel/cloudflare/README.md).
+
 ### Privacy & Legal Notice
 
 **Important:** When using the `recordings` configuration (specifically `save_mode`, `save_path`, and `retention_days`), server operators must comply with all applicable local, state, and federal laws regarding voice recording and data privacy.
