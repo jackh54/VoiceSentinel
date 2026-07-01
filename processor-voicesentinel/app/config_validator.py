@@ -127,6 +127,16 @@ class ConfigValidator:
                 self.errors.append("processing.worker_count must be at least 1")
         except (ValueError, TypeError):
             self.errors.append(f"processing.worker_count must be an integer, got: {type(worker_count).__name__}")
+        stt_concurrency = processing.get("stt_concurrency")
+        if stt_concurrency is not None:
+            try:
+                stt_concurrency = int(stt_concurrency)
+                if stt_concurrency < 1:
+                    self.errors.append("processing.stt_concurrency must be at least 1")
+            except (ValueError, TypeError):
+                self.errors.append(
+                    f"processing.stt_concurrency must be an integer, got: {type(stt_concurrency).__name__}"
+                )
 
     def _validate_report_buffer(self, config: Dict[str, Any]):
         rb = config.get("report_buffer")

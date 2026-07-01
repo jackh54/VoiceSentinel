@@ -33,7 +33,9 @@
   },
   "processing": {
     "queue_max_size": 500,
-    "worker_count": 1
+    "worker_count": 4,
+    "stt_concurrency": 4,
+    "_comment": "worker_count: parallel queue workers. stt_concurrency: max simultaneous transcriptions (defaults to worker_count). Increase both for busy pool servers; lower on CPU-only hosts if load is too high."
   },
   "response": {
     "include_audio": false,

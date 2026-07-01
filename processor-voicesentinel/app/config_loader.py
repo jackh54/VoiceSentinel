@@ -34,6 +34,7 @@ _ENV_MAPPINGS: Dict[str, Tuple[str, ...]] = {
     "AUDIO_CHANNELS": ("audio", "channels"),
     "PROCESSING_QUEUE_MAX_SIZE": ("processing", "queue_max_size"),
     "PROCESSING_WORKER_COUNT": ("processing", "worker_count"),
+    "PROCESSING_STT_CONCURRENCY": ("processing", "stt_concurrency"),
     "RECORDINGS_SAVE_MODE": ("recordings", "save_mode"),
     "RECORDINGS_SAVE_PATH": ("recordings", "save_path"),
     "RECORDINGS_RETENTION_DAYS": ("recordings", "retention_days"),
@@ -84,6 +85,7 @@ _INT_KEYS = {
     "AUDIO_CHANNELS",
     "PROCESSING_QUEUE_MAX_SIZE",
     "PROCESSING_WORKER_COUNT",
+    "PROCESSING_STT_CONCURRENCY",
     "RECORDINGS_RETENTION_DAYS",
     "LLM_PROFANITY_TIMEOUT_SECONDS",
     "LLM_PROFANITY_MAX_CONCURRENT_REQUESTS",
@@ -124,7 +126,8 @@ def get_default_config() -> Dict[str, Any]:
         },
         "processing": {
             "queue_max_size": 500,
-            "worker_count": 1,
+            "worker_count": 4,
+            "stt_concurrency": 4,
         },
         "recordings": {
             "save_mode": "none",

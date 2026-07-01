@@ -145,6 +145,14 @@ def _resolve_per_language_lists(
     return [], [], None
 
 
+def _parse_positive_int(value, default: int = 1) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return max(1, default)
+    return max(1, parsed)
+
+
 class WebSocketManager:
     def __init__(self):
         self.active_connections = {}
@@ -166,18 +174,35 @@ class WebSocketManager:
     async def initialize(self, config):
         self.config = config
         self.console_status = ConsoleStatus(config)
-        queue_max = config.get("processing", {}).get("queue_max_size", 500)
-        self._processing_queue = asyncio.Queue(maxsize=max(1, queue_max))
-        self._stt_semaphore = asyncio.Semaphore(1)
-        worker_count = config.get("processing", {}).get("worker_count", 1)
-        try:
-            worker_count = max(1, int(worker_count))
-        except (TypeError, ValueError):
-            worker_count = 1
+        processing_config = config.get("processing", {}) or {}
+        queue_max = _parse_positive_int(processing_config.get("queue_max_size", 500), 500)
+        self._processing_queue = asyncio.Queue(maxsize=queue_max)
+        worker_count = _parse_positive_int(processing_config.get("worker_count", 1), 1)
+        stt_concurrency_raw = processing_config.get("stt_concurrency")
+        if stt_concurrency_raw is None:
+            stt_concurrency = worker_count
+        else:
+            stt_concurrency = _parse_positive_int(stt_concurrency_raw, worker_count)
+        if worker_count < stt_concurrency:
+            logger.info(
+                "Increasing processing.worker_count from %s to %s to match stt_concurrency",
+                worker_count,
+                stt_concurrency,
+            )
+            worker_count = stt_concurrency
+        self._stt_semaphore = asyncio.Semaphore(stt_concurrency)
+        self._worker_count = worker_count
+        self._stt_concurrency = stt_concurrency
         self._worker_tasks = [
             asyncio.create_task(self._processing_worker())
             for _ in range(worker_count)
         ]
+        logger.info(
+            "Processing queue max=%s workers=%s stt_concurrency=%s",
+            queue_max,
+            worker_count,
+            stt_concurrency,
+        )
         transcription_config = config.get("transcription", {})
         
         self.transcriber = create_transcriber(
@@ -608,20 +633,23 @@ class WebSocketManager:
         while self._processing_queue is not None:
             try:
                 job = await self._processing_queue.get()
-                client_id = job["client_id"]
-                if client_id not in self.active_connections:
-                    continue
-                await self._process_audio_async(
-                    client_id,
-                    job["final_audio"],
-                    job["profanity_words"],
-                    job.get("player_name"),
-                    job.get("session_id"),
-                    job.get("language_word_lists"),
-                    bool(job.get("partial_match", True)),
-                    bool(job.get("case_sensitive", False)),
-                    job.get("language_hint"),
-                )
+                try:
+                    client_id = job["client_id"]
+                    if client_id not in self.active_connections:
+                        continue
+                    await self._process_audio_async(
+                        client_id,
+                        job["final_audio"],
+                        job["profanity_words"],
+                        job.get("player_name"),
+                        job.get("session_id"),
+                        job.get("language_word_lists"),
+                        bool(job.get("partial_match", True)),
+                        bool(job.get("case_sensitive", False)),
+                        job.get("language_hint"),
+                    )
+                finally:
+                    self._processing_queue.task_done()
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -809,6 +837,13 @@ async def get_stats():
         "processing_queue_size": qsize,
         "queue_max_size": queue_max,
         "queue_utilization_percent": queue_utilization,
+        "worker_count": getattr(ws_manager, "_worker_count", 1),
+        "stt_concurrency": getattr(ws_manager, "_stt_concurrency", 1),
+        "currently_processing": (
+            ws_manager.console_status.stats["currently_processing"]
+            if ws_manager.console_status
+            else 0
+        ),
     }
 
 @app.websocket("/ws/{client_id}")
