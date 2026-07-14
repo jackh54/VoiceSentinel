@@ -101,6 +101,8 @@ ipython_config.py
 .dockerignore
 docker-compose.override.yml
 
+mappings/
+
 # Models and Data
 processor-voicesentinel/models/
 processor-voicesentinel/data/

@@ -156,6 +156,12 @@ def get_default_config() -> Dict[str, Any]:
         "pool_server": False,
         "pool_server_audit_log": "logs/pooled_server_audit.jsonl",
         "pool_server_transcripts_dir": "logs/pool_transcripts_by_license",
+        "pool_server_load": {
+            "directory_load_url": "",
+            "report_key": "",
+            "server_id": 0,
+            "server_ip": "",
+        },
         "report_buffer": {
             "enabled": False,
             "path": "report_buffer/",
@@ -163,6 +169,53 @@ def get_default_config() -> Dict[str, Any]:
             "save_audio": False,
         },
     }
+
+
+def _config_missing_defaults(defaults: Dict[str, Any], current: Dict[str, Any]) -> bool:
+    for key, default_val in defaults.items():
+        if key.startswith("_"):
+            continue
+        if key not in current:
+            return True
+        if isinstance(default_val, dict):
+            cur_child = current.get(key)
+            if not isinstance(cur_child, dict):
+                return True
+            if _config_missing_defaults(default_val, cur_child):
+                return True
+    return False
+
+
+def _persist_migrated_config(
+    config_path: str,
+    file_config: Dict[str, Any],
+    defaults: Dict[str, Any],
+) -> None:
+    merged = _deep_merge(defaults, file_config, preserve_underscore_keys=True)
+    Path(config_path).parent.mkdir(parents=True, exist_ok=True)
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump(merged, f, indent=2)
+        f.write("\n")
+
+
+def _migrate_config_file(
+    config_path: str,
+    file_config: Dict[str, Any],
+    defaults: Dict[str, Any],
+) -> Dict[str, Any]:
+    working = deepcopy(file_config)
+    needs_defaults = _config_missing_defaults(defaults, working)
+    if not needs_defaults:
+        return file_config
+
+    try:
+        _persist_migrated_config(config_path, working, defaults)
+        logger.info("Updated config.json with missing default keys")
+    except OSError as exc:
+        logger.warning("Could not migrate config.json at %s: %s", config_path, exc)
+        return file_config
+
+    return _deep_merge(defaults, working, preserve_underscore_keys=True)
 
 
 def _parse_env_value(key: str, raw: str) -> Any:
@@ -205,15 +258,23 @@ def _load_env_overrides() -> Tuple[Dict[str, Any], List[str]]:
     return overrides, applied
 
 
-def _deep_merge(base: Dict[str, Any], overlay: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def _deep_merge(
+    base: Dict[str, Any],
+    overlay: Optional[Dict[str, Any]],
+    preserve_underscore_keys: bool = False,
+) -> Dict[str, Any]:
     if not overlay:
         return base
     result = deepcopy(base)
     for key, value in overlay.items():
-        if key.startswith("_"):
+        if not preserve_underscore_keys and key.startswith("_"):
             continue
         if isinstance(value, dict) and isinstance(result.get(key), dict):
-            result[key] = _deep_merge(result[key], value)
+            result[key] = _deep_merge(
+                result[key],
+                value,
+                preserve_underscore_keys=preserve_underscore_keys,
+            )
         else:
             result[key] = deepcopy(value)
     return result
@@ -235,6 +296,7 @@ def load_config() -> Dict[str, Any]:
         with open(config_path, "r", encoding="utf-8") as f:
             file_config = json.load(f)
         used_config_file = True
+        file_config = _migrate_config_file(config_path, file_config, defaults)
     except FileNotFoundError:
         pass
     except json.JSONDecodeError as e:

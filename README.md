@@ -4,7 +4,7 @@
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![Minecraft](https://img.shields.io/badge/Minecraft-1.21+-green.svg)](https://www.minecraft.net/)
 
-VoiceSentinel is a real-time voice moderation system for Minecraft servers using Simple Voice Chat. It combines a Java plugin with a Python processor for speech-to-text transcription and content filtering.
+VoiceSentinel is a real-time voice moderation system for Minecraft servers using **Simple Voice Chat** or **PlasmoVoice**. It combines a Java plugin with a Python processor for speech-to-text transcription and content filtering.
 
 ## Features
 
@@ -27,7 +27,8 @@ VoiceSentinel is a real-time voice moderation system for Minecraft servers using
 
 ### Minecraft Integration
 - Folia & Paper compatibility
-- Simple Voice Chat integration
+- Simple Voice Chat integration (default)
+- PlasmoVoice integration (`voice_backend: PLASMOVOICE` or `AUTO`)
 
 ### Voice reports (plugin v2.2.1+)
 - In-memory rolling transcript buffer per player (all final transcripts, not only flagged lines).
@@ -41,7 +42,7 @@ VoiceSentinel is a real-time voice moderation system for Minecraft servers using
 - Java 17+ for the Minecraft plugin
 - Python 3.8+ for the processor
 - Minecraft 1.21+ Folia or Paper
-- Simple Voice Chat plugin
+- Simple Voice Chat **or** PlasmoVoice (not both)
 - Minimum 4GB RAM (8GB+ recommended)
 - Multi-core CPU
 

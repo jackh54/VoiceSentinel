@@ -11,8 +11,6 @@ services:
       - ./config.json:/app/config.json
       - ./recordings:/app/recordings
       - whisper_cache:/tmp/whisper_cache
-    environment:
-      - CONFIG_PATH=/app/config.json
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:28472/health"]
       interval: 30s

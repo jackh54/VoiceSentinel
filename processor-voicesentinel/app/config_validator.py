@@ -56,6 +56,24 @@ class ConfigValidator:
         tx_dir = config.get("pool_server_transcripts_dir")
         if tx_dir is not None and not isinstance(tx_dir, str):
             self.errors.append(f"pool_server_transcripts_dir must be a string, got: {type(tx_dir).__name__}")
+        load = config.get("pool_server_load")
+        if load is not None:
+            if not isinstance(load, dict):
+                self.errors.append(f"pool_server_load must be an object, got: {type(load).__name__}")
+                return
+            for key in ("directory_load_url", "report_key", "server_ip"):
+                val = load.get(key)
+                if val is not None and not isinstance(val, str):
+                    self.errors.append(f"pool_server_load.{key} must be a string, got: {type(val).__name__}")
+            server_id = load.get("server_id")
+            if server_id is not None:
+                try:
+                    if int(server_id) < 0:
+                        self.errors.append("pool_server_load.server_id must be >= 0")
+                except (TypeError, ValueError):
+                    self.errors.append(
+                        f"pool_server_load.server_id must be an integer, got: {type(server_id).__name__}"
+                    )
 
     def _validate_transcription(self, config: Dict[str, Any]):
         transcription = config.get("transcription", {})

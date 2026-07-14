@@ -2,6 +2,12 @@
   "pool_server": false,
   "pool_server_audit_log": "logs/pooled_server_audit.jsonl",
   "pool_server_transcripts_dir": "logs/pool_transcripts_by_license",
+  "pool_server_load": {
+    "directory_load_url": "https://api.pandascript.dev/cdn/voicesentinel/load",
+    "report_key": "",
+    "server_id": 0,
+    "server_ip": ""
+  },
   "server": {
     "host": "0.0.0.0",
     "port": 28472,

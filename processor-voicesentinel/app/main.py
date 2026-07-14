@@ -30,6 +30,7 @@ from app.report_buffer import (
     sanitize_seconds_seconds,
     check_evidence_rate_limits,
 )
+from app.cdn_load import CdnLoadMonitor, cdn_load_enabled, cdn_load_settings
 
 import sys
 
@@ -45,7 +46,7 @@ logging.getLogger("huggingface_hub.file_download").setLevel(logging.INFO)
 
 logger = logging.getLogger(__name__)
 
-VERSION = "3.3.1"
+VERSION = "3.4.0"
 
 
 def effective_server_key(cfg: dict) -> str:
@@ -170,7 +171,23 @@ class WebSocketManager:
         self._worker_tasks = []
         self._stt_semaphore = None
         self._console_update_task = None
+        self._last_activity_at = time.time()
     
+    def note_activity(self) -> None:
+        self._last_activity_at = time.time()
+
+    async def broadcast_rebalance(self, payload: dict) -> int:
+        message = {"type": "rebalance", **payload}
+        sent = 0
+        for client_id, websocket in list(self.active_connections.items()):
+            try:
+                await websocket.send_json(message)
+                sent += 1
+            except Exception as e:
+                logger.warning("Rebalance broadcast failed for %s: %s", client_id, e)
+                self.disconnect(client_id)
+        return sent
+
     async def initialize(self, config):
         self.config = config
         self.console_status = ConsoleStatus(config)
@@ -310,6 +327,7 @@ class WebSocketManager:
     
     async def process_audio(self, client_id: str, audio_data: bytes, profanity_words: list, player_name: str = None, session_id: str = None, language_word_lists: dict = None):
         try:
+            self.note_activity()
             self.buffer_metadata[client_id] = {
                 'player_name': player_name,
                 'session_id': session_id,
@@ -346,6 +364,7 @@ class WebSocketManager:
         language_hint: str = None,
     ):
         try:
+            self.note_activity()
             final_audio = self.audio_buffers.get(client_id, b'') + audio_data
             self.audio_buffers[client_id] = b''
             
@@ -634,6 +653,7 @@ class WebSocketManager:
             try:
                 job = await self._processing_queue.get()
                 try:
+                    self.note_activity()
                     client_id = job["client_id"]
                     if client_id not in self.active_connections:
                         continue
@@ -656,6 +676,7 @@ class WebSocketManager:
                 logger.error(f"Processing worker error: {e}")
 
 ws_manager = WebSocketManager()
+cdn_load_monitor: Optional[CdnLoadMonitor] = None
 
 async def console_update_task():
     while True:
@@ -688,7 +709,17 @@ async def lifespan(app: FastAPI):
     if ws_manager.console_status:
         ws_manager.console_status.print_status(force=True)
     ws_manager._console_update_task = asyncio.create_task(console_update_task())
+    global cdn_load_monitor
+    if cdn_load_enabled(config):
+        cdn_load_monitor = CdnLoadMonitor(ws_manager, config)
+        cdn_load_monitor.start()
+        settings = cdn_load_settings(config)
+        if settings:
+            logger.info("CDN load reporting enabled for %s", settings["server_ip"])
     yield
+    if cdn_load_monitor is not None:
+        await cdn_load_monitor.stop()
+        cdn_load_monitor = None
     if ws_manager._console_update_task is not None:
         ws_manager._console_update_task.cancel()
         try:
