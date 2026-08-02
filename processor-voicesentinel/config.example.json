@@ -6,7 +6,9 @@
     "directory_load_url": "https://api.pandascript.dev/cdn/voicesentinel/load",
     "report_key": "",
     "server_id": 0,
-    "server_ip": ""
+    "server_ip": "",
+    "pool": "default",
+    "_comment": "pool: 'default' for normal public processors, 'high_volume' for the big-server overflow processor (excluded from normal plugin selection)."
   },
   "server": {
     "host": "0.0.0.0",

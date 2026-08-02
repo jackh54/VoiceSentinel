@@ -7,6 +7,7 @@ import asyncio
 import time
 import base64
 import hashlib
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -175,6 +176,44 @@ class WebSocketManager:
     
     def note_activity(self) -> None:
         self._last_activity_at = time.time()
+
+    def note_enqueue(self, client_id: str) -> None:
+        """Track recent queue submissions for high-volume client detection."""
+        now = time.time()
+        events = getattr(self, "_enqueue_events", None)
+        if events is None:
+            events = deque()
+            self._enqueue_events = events
+        events.append((now, client_id))
+        cutoff = now - 120.0
+        while events and events[0][0] < cutoff:
+            events.popleft()
+
+    def recent_enqueue_counts(self, window_seconds: float = 120.0) -> dict[str, int]:
+        now = time.time()
+        cutoff = now - window_seconds
+        events = getattr(self, "_enqueue_events", None)
+        if not events:
+            return {}
+        counts: dict[str, int] = {}
+        for ts, client_id in events:
+            if ts < cutoff:
+                continue
+            counts[client_id] = counts.get(client_id, 0) + 1
+        return counts
+
+    async def send_rebalance(self, client_id: str, payload: dict) -> bool:
+        websocket = self.active_connections.get(client_id)
+        if websocket is None:
+            return False
+        message = {"type": "rebalance", **payload}
+        try:
+            await websocket.send_json(message)
+            return True
+        except Exception as e:
+            logger.warning("Rebalance send failed for %s: %s", client_id, e)
+            self.disconnect(client_id)
+            return False
 
     async def broadcast_rebalance(self, payload: dict) -> int:
         message = {"type": "rebalance", **payload}
@@ -393,6 +432,7 @@ class WebSocketManager:
             }
             try:
                 self._processing_queue.put_nowait(job)
+                self.note_enqueue(client_id)
             except asyncio.QueueFull:
                 logger.warning(f"Processing queue full, dropping recording for client {client_id}")
                 fp = self.get_license_fingerprint(client_id)

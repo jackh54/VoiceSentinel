@@ -16,10 +16,26 @@ REBALANCE_GAP_PERCENT = 25
 REBALANCE_COOLDOWN_SECONDS = 600
 REBALANCE_INACTIVITY_SECONDS = 90
 
+# Move a single Minecraft server to the high_volume pool when it dominates the queue.
+HEAVY_CLIENT_LOAD_THRESHOLD = 50
+HEAVY_CLIENT_SHARE_THRESHOLD = 0.35
+HEAVY_CLIENT_MIN_ENQUEUES = 20
+HEAVY_CLIENT_WINDOW_SECONDS = 120
+HEAVY_CLIENT_COOLDOWN_SECONDS = 300
+
 
 def _pool_load_block(config: dict) -> dict:
     block = config.get("pool_server_load")
     return block if isinstance(block, dict) else {}
+
+
+def _parse_pool_name(value: Any) -> str:
+    if not isinstance(value, str):
+        return "default"
+    normalized = value.strip().lower()
+    if normalized in ("high_volume", "overflow", "big"):
+        return "high_volume"
+    return "default"
 
 
 def cdn_load_settings(config: dict) -> Optional[dict[str, Any]]:
@@ -41,6 +57,7 @@ def cdn_load_settings(config: dict) -> Optional[dict[str, Any]]:
         "report_key": report_key,
         "server_id": server_id,
         "server_ip": server_ip,
+        "pool": _parse_pool_name(block.get("pool")),
     }
 
 
@@ -96,7 +113,7 @@ def _http_json(
     bearer: str,
     body: Optional[dict] = None,
     timeout: float = 10.0,
-) -> tuple[int, Optional[dict]]:
+) -> tuple[int, Any]:
     data = None
     headers = {
         "Accept": "application/json",
@@ -155,17 +172,12 @@ async def post_load_report(ws_manager: Any, config: dict) -> bool:
     return False
 
 
-def _parse_directory_peers(data: Optional[dict], self_server_ip: str) -> list[dict]:
-    if not data:
-        return []
-    servers = data
-    if isinstance(data, dict):
-        servers = data.get("servers")
-    if not isinstance(servers, list):
+def _parse_server_rows(rows: Any, self_server_ip: str) -> list[dict]:
+    if not isinstance(rows, list):
         return []
     self_norm = self_server_ip.strip().rstrip("/").lower()
     peers: list[dict] = []
-    for row in servers:
+    for row in rows:
         if not isinstance(row, dict):
             continue
         ip = row.get("serverIp")
@@ -183,18 +195,77 @@ def _parse_directory_peers(data: Optional[dict], self_server_ip: str) -> list[di
     return peers
 
 
-async def fetch_directory_peers(config: dict) -> list[dict]:
+def _parse_directory_payload(data: Any, self_server_ip: str) -> dict[str, list[dict]]:
+    """Split directory response into default peers and high_volume targets."""
+    if isinstance(data, list):
+        return {
+            "servers": _parse_server_rows(data, self_server_ip),
+            "highVolumeServers": [],
+        }
+    if not isinstance(data, dict):
+        return {"servers": [], "highVolumeServers": []}
+    return {
+        "servers": _parse_server_rows(data.get("servers"), self_server_ip),
+        "highVolumeServers": _parse_server_rows(data.get("highVolumeServers"), self_server_ip),
+    }
+
+
+async def fetch_directory(config: dict) -> dict[str, list[dict]]:
     settings = cdn_load_settings(config)
     if not settings:
-        return []
+        return {"servers": [], "highVolumeServers": []}
     servers_url = directory_servers_url(settings["directory_load_url"])
     status, data = await asyncio.to_thread(
         _http_json, "GET", servers_url, settings["report_key"], None
     )
     if not status or status < 200 or status >= 300:
         logger.warning("CDN directory fetch for rebalance failed HTTP %s", status or "error")
+        return {"servers": [], "highVolumeServers": []}
+    return _parse_directory_payload(data, settings["server_ip"])
+
+
+async def fetch_directory_peers(config: dict) -> list[dict]:
+    settings = cdn_load_settings(config)
+    directory = await fetch_directory(config)
+    if not settings:
         return []
-    return _parse_directory_peers(data, settings["server_ip"])
+    if settings["pool"] == "high_volume":
+        return directory["highVolumeServers"]
+    return directory["servers"]
+
+
+def pick_lowest_load(servers: list[dict]) -> Optional[dict]:
+    if not servers:
+        return None
+    return min(servers, key=lambda p: p["serverLoad"])
+
+
+def high_volume_mark_url(load_url: str) -> str:
+    url = load_url.rstrip("/")
+    if url.endswith("/load"):
+        return url[: -len("/load")] + "/high-volume"
+    return url.replace("/load", "/high-volume")
+
+
+async def mark_license_high_volume(config: dict, license_key: str) -> bool:
+    settings = cdn_load_settings(config)
+    if not settings or not license_key:
+        return False
+    status, body = await asyncio.to_thread(
+        _http_json,
+        "POST",
+        high_volume_mark_url(settings["directory_load_url"]),
+        settings["report_key"],
+        {"licenseKey": license_key},
+    )
+    if status and 200 <= status < 300:
+        return True
+    logger.warning(
+        "Failed to mark license for high_volume pool HTTP %s body=%s",
+        status or "error",
+        body,
+    )
+    return False
 
 
 class CdnLoadMonitor:
@@ -202,6 +273,7 @@ class CdnLoadMonitor:
         self.ws_manager = ws_manager
         self.config = config
         self._last_rebalance_at = 0.0
+        self._last_heavy_move_at: dict[str, float] = {}
         self._task: Optional[asyncio.Task] = None
 
     def start(self) -> None:
@@ -219,8 +291,10 @@ class CdnLoadMonitor:
             self._task = None
 
     async def _run(self) -> None:
+        settings = cdn_load_settings(self.config) or {}
         logger.info(
-            "CDN load monitor started (report every %ss, rebalance threshold=%s gap=%s cooldown=%ss)",
+            "CDN load monitor started (pool=%s report every %ss, rebalance threshold=%s gap=%s cooldown=%ss)",
+            settings.get("pool", "default"),
             LOAD_REPORT_INTERVAL_SECONDS,
             REBALANCE_LOAD_THRESHOLD,
             REBALANCE_GAP_PERCENT,
@@ -237,7 +311,76 @@ class CdnLoadMonitor:
 
     async def _tick(self) -> None:
         await post_load_report(self.ws_manager, self.config)
+        await self._maybe_move_heavy_clients()
         await self._maybe_rebalance()
+
+    async def _maybe_move_heavy_clients(self) -> None:
+        settings = cdn_load_settings(self.config)
+        if not settings or settings["pool"] == "high_volume":
+            return
+
+        metrics = compute_load_metrics(self.ws_manager, self.config)
+        if metrics["serverLoad"] < HEAVY_CLIENT_LOAD_THRESHOLD:
+            return
+
+        counts = self.ws_manager.recent_enqueue_counts(HEAVY_CLIENT_WINDOW_SECONDS)
+        total = sum(counts.values())
+        if total < HEAVY_CLIENT_MIN_ENQUEUES:
+            return
+
+        heavy_clients = [
+            (client_id, count)
+            for client_id, count in counts.items()
+            if count / total >= HEAVY_CLIENT_SHARE_THRESHOLD
+            and client_id in self.ws_manager.active_connections
+        ]
+        if not heavy_clients:
+            return
+
+        directory = await fetch_directory(self.config)
+        if not directory["highVolumeServers"]:
+            logger.warning(
+                "Heavy client detected but no high_volume processors are available in the directory"
+            )
+            return
+
+        now = time.time()
+        for client_id, count in sorted(heavy_clients, key=lambda item: item[1], reverse=True):
+            last = self._last_heavy_move_at.get(client_id, 0.0)
+            if now - last < HEAVY_CLIENT_COOLDOWN_SECONDS:
+                continue
+
+            license_key = self.ws_manager.get_license_plain(client_id)
+            if not license_key:
+                logger.warning(
+                    "Heavy client %s has no license key; cannot mark for high_volume pool",
+                    client_id,
+                )
+                continue
+
+            marked = await mark_license_high_volume(self.config, license_key)
+            if not marked:
+                continue
+
+            share = count / total
+            # Existing plugin rebalance: refetch directory and connect to lowest-load entry.
+            # After the mark, that license's directory only contains high_volume processors.
+            payload = {
+                "reason": "load",
+                "serverLoad": metrics["serverLoad"],
+                "bestOtherLoad": pick_lowest_load(directory["highVolumeServers"])["serverLoad"],
+            }
+            sent = await self.ws_manager.send_rebalance(client_id, payload)
+            if sent:
+                self._last_heavy_move_at[client_id] = now
+                logger.info(
+                    "Marked heavy client %s for high_volume pool and sent rebalance (share=%.0f%% count=%s/%s load=%s)",
+                    client_id,
+                    share * 100,
+                    count,
+                    total,
+                    metrics["serverLoad"],
+                )
 
     async def _maybe_rebalance(self) -> None:
         metrics = compute_load_metrics(self.ws_manager, self.config)
