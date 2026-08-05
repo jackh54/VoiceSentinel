@@ -22,6 +22,21 @@ def _is_tty() -> bool:
         return False
 
 
+def _is_limited_console() -> bool:
+    """Pterodactyl / web consoles get a PTY but mishandle Rich Live (flash + clipped lines)."""
+    if os.environ.get("P_SERVER_UUID") or os.environ.get("PTERODACTYL"):
+        return True
+    if os.environ.get("CONSOLE_STABLE", "").strip().lower() in ("1", "true", "yes"):
+        return True
+    home = os.environ.get("HOME", "")
+    if home.rstrip("/") == "/home/container":
+        return True
+    term = (os.environ.get("TERM") or "").strip().lower()
+    if term in ("dumb",):
+        return True
+    return False
+
+
 def _format_ago(ts: Optional[float], now: float) -> str:
     if ts is None:
         return "—"
@@ -102,10 +117,18 @@ class ConsoleStatus:
         self.live_display = bool(console_cfg.get("live_display", True))
         self.started_at = time.time()
         self._runtime_provider: Optional[RuntimeProvider] = None
-        self._console = Console(file=sys.stdout, force_terminal=_is_tty() or None)
+        self._console = Console(
+            file=sys.stdout,
+            force_terminal=_is_tty() or None,
+            soft_wrap=False,
+            highlight=False,
+        )
         self._live: Optional[Live] = None
         self._use_live = False
+        self._use_stable = False
         self._last_compact_line = ""
+        self._panel_line_count = 0
+        self._last_stable_draw_at = 0.0
 
     def attach_runtime(self, provider: RuntimeProvider) -> None:
         self._runtime_provider = provider
@@ -202,9 +225,7 @@ class ConsoleStatus:
             Text.from_markup(
                 f"[dim]Processing[/dim]\n[bold]{self.stats['currently_processing']}[/bold]"
             ),
-            Text.from_markup(
-                f"[dim]CPU[/dim]\n[bold {cpu_style}]{cpu_text}[/]"
-            ),
+            Text.from_markup(f"[dim]CPU[/dim]\n[bold {cpu_style}]{cpu_text}[/]"),
         )
 
         counters = Table.grid(expand=True, padding=(0, 2))
@@ -214,7 +235,9 @@ class ConsoleStatus:
         counters.add_column(ratio=1)
         counters.add_row(
             Text.from_markup(f"[dim]Processed[/dim]\n[bold]{self.stats['processed']}[/bold]"),
-            Text.from_markup(f"[dim]Flagged[/dim]\n[bold yellow]{self.stats['flagged']}[/bold yellow]"),
+            Text.from_markup(
+                f"[dim]Flagged[/dim]\n[bold yellow]{self.stats['flagged']}[/bold yellow]"
+            ),
             Text.from_markup(f"[dim]Muted[/dim]\n[bold red]{self.stats['muted']}[/bold red]"),
             Text.from_markup(f"[dim]Workers / STT[/dim]\n[bold]{workers} / {stt}[/bold]"),
         )
@@ -275,9 +298,16 @@ class ConsoleStatus:
                         _format_ago(item.get("time"), now),
                     )
             sections.append(
-                Panel(transcript_table, title="Recent Transcripts", border_style="blue", padding=(0, 0))
+                Panel(
+                    transcript_table,
+                    title="Recent Transcripts",
+                    border_style="blue",
+                    padding=(0, 0),
+                )
             )
 
+        # Trailing blank line prevents web consoles from clipping the bottom border.
+        sections.append(Text(""))
         return Group(*sections)
 
     def _compact_line(self) -> str:
@@ -298,25 +328,71 @@ class ConsoleStatus:
             f"up={_format_uptime(self.started_at, now)}"
         )
 
+    def _capture_panel_text(self) -> str:
+        with self._console.capture() as capture:
+            self._console.print(self._build_renderable())
+        text = capture.get()
+        if not text.endswith("\n"):
+            text += "\n"
+        return text
+
+    def _stable_redraw(self, force: bool = False) -> None:
+        now = time.time()
+        # Throttle redraws on limited consoles to cut flicker.
+        if not force and (now - self._last_stable_draw_at) < 2.0:
+            return
+        text = self._capture_panel_text()
+        lines = text.splitlines()
+        n = len(lines)
+        out = sys.stdout
+        try:
+            if self._panel_line_count > 0:
+                out.write(f"\033[{self._panel_line_count}A")
+            for i, line in enumerate(lines):
+                out.write("\033[2K\r")
+                out.write(line)
+                out.write("\n")
+            if self._panel_line_count > n:
+                for _ in range(self._panel_line_count - n):
+                    out.write("\033[2K\n")
+                out.write(f"\033[{self._panel_line_count - n}A")
+            out.flush()
+            self._panel_line_count = n
+            self._last_stable_draw_at = now
+        except Exception:
+            self._console.print(self._build_renderable())
+            self._panel_line_count = 0
+
     def start(self) -> None:
         _prime_cpu()
         self.started_at = time.time()
-        self._use_live = bool(self.live_display and _is_tty())
+        limited = _is_limited_console()
+        tty = _is_tty()
+        self._use_live = bool(self.live_display and tty and not limited)
+        self._use_stable = bool(self.live_display and tty and limited)
+
+        if self._use_stable:
+            self._stable_redraw(force=True)
+            return
+
         if not self._use_live:
-            # Emit the done-signal banner once for Pterodactyl / non-TTY hosts.
             line = self._compact_line()
             self._console.print(line)
             self._last_compact_line = line
             return
+
         if self._live is not None:
             return
+        # auto_refresh=False: we drive updates once per second (avoids double-redraw flash).
         self._live = Live(
             self._build_renderable(),
             console=self._console,
-            refresh_per_second=4,
+            auto_refresh=False,
             transient=False,
+            vertical_overflow="visible",
         )
         self._live.start()
+        self._live.update(self._build_renderable(), refresh=True)
 
     def stop(self) -> None:
         if self._live is not None:
@@ -327,12 +403,14 @@ class ConsoleStatus:
             self._live = None
 
     def refresh(self) -> None:
-        if not self.live_display and self._live is None:
+        if not self.live_display and self._live is None and not self._use_stable:
             return
         if self._use_live and self._live is not None:
-            self._live.update(self._build_renderable())
+            self._live.update(self._build_renderable(), refresh=True)
             return
-        # Non-TTY: only print when the compact summary changes (or first time).
+        if self._use_stable:
+            self._stable_redraw(force=False)
+            return
         line = self._compact_line()
         if line != self._last_compact_line:
             self._console.print(line)
@@ -347,11 +425,13 @@ class ConsoleStatus:
             else:
                 self.refresh()
             return
+        if self._use_stable:
+            self._stable_redraw(force=True)
+            return
         line = self._compact_line()
         if force or line != self._last_compact_line:
             self._console.print(line)
             self._last_compact_line = line
 
-    # Kept for callers that still check change gating; live path always refreshes.
     def has_changed(self) -> bool:
         return True

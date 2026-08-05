@@ -70,7 +70,7 @@
   "console": {
     "log_transcripts": false,
     "live_display": true,
-    "_comment": "console.log_transcripts: Show recent transcripts in the live Rich status dashboard. console.live_display: Enable the live-updating console panel on TTY (set false to disable; non-TTY hosts print compact one-line status updates instead)"
+    "_comment": "console.log_transcripts: Show recent transcripts in the status dashboard. console.live_display: Enable the updating console panel. On Pterodactyl /home/container (or CONSOLE_STABLE=1), uses a stable in-place redraw instead of Rich Live to avoid flicker and clipped borders."
   },
   "report_buffer": {
     "enabled": false,
