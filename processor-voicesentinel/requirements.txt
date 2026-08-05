@@ -4,3 +4,5 @@ faster-whisper>=1.0.0
 numpy==1.26.4
 websockets==12.0
 boto3>=1.35.0
+psutil>=5.9.0
+rich>=13.0.0

@@ -72,12 +72,38 @@ def directory_servers_url(load_url: str) -> str:
     return url.replace("/load", "/servers")
 
 
-def _cpu_percent() -> float:
+_cpu_primed = False
+_cpu_unavailable_logged = False
+
+
+def _prime_cpu_sampler() -> None:
+    """Non-blocking prime so the first real sample is not always 0.0."""
+    global _cpu_primed, _cpu_unavailable_logged
     try:
         import psutil  # type: ignore
 
+        psutil.cpu_percent(interval=None)
+        _cpu_primed = True
+    except Exception as e:
+        if not _cpu_unavailable_logged:
+            logger.warning("CPU monitoring unavailable (install psutil): %s", e)
+            _cpu_unavailable_logged = True
+
+
+def _cpu_percent() -> float:
+    global _cpu_primed, _cpu_unavailable_logged
+    try:
+        import psutil  # type: ignore
+
+        if not _cpu_primed:
+            psutil.cpu_percent(interval=None)
+            _cpu_primed = True
+            return 0.0
         return float(psutil.cpu_percent(interval=None))
-    except Exception:
+    except Exception as e:
+        if not _cpu_unavailable_logged:
+            logger.warning("CPU monitoring unavailable (install psutil): %s", e)
+            _cpu_unavailable_logged = True
         return 0.0
 
 
@@ -163,9 +189,10 @@ async def post_load_report(ws_manager: Any, config: dict) -> bool:
     )
     if status and 200 <= status < 300:
         logger.debug(
-            "CDN load report ok serverLoad=%s activeSessions=%s",
+            "CDN load report ok serverLoad=%s activeSessions=%s cpuPercent=%s",
             metrics["serverLoad"],
             metrics["activeSessions"],
+            metrics["cpuPercent"],
         )
         return True
     logger.warning("CDN load report failed HTTP %s", status or "error")
@@ -279,6 +306,7 @@ class CdnLoadMonitor:
     def start(self) -> None:
         if not cdn_load_enabled(self.config):
             return
+        _prime_cpu_sampler()
         self._task = asyncio.create_task(self._run())
 
     async def stop(self) -> None:

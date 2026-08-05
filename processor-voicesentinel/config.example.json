@@ -70,7 +70,7 @@
   "console": {
     "log_transcripts": false,
     "live_display": true,
-    "_comment": "console.log_transcripts: Show recent transcripts in console status. console.live_display: Enable live updating console status (set to false to disable and reduce console spam)"
+    "_comment": "console.log_transcripts: Show recent transcripts in the live Rich status dashboard. console.live_display: Enable the live-updating console panel on TTY (set false to disable; non-TTY hosts print compact one-line status updates instead)"
   },
   "report_buffer": {
     "enabled": false,

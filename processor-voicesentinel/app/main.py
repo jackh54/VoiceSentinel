@@ -38,7 +38,7 @@ import sys
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
+    handlers=[logging.StreamHandler(sys.stderr)]
 )
 
 os.environ['HF_HUB_DISABLE_PROGRESS_BARS'] = '1'
@@ -229,7 +229,7 @@ class WebSocketManager:
 
     async def initialize(self, config):
         self.config = config
-        self.console_status = ConsoleStatus(config)
+        self.console_status = ConsoleStatus(config, version=VERSION)
         processing_config = config.get("processing", {}) or {}
         queue_max = _parse_positive_int(processing_config.get("queue_max_size", 500), 500)
         self._processing_queue = asyncio.Queue(maxsize=queue_max)
@@ -721,11 +721,30 @@ cdn_load_monitor: Optional[CdnLoadMonitor] = None
 async def console_update_task():
     while True:
         try:
-            await asyncio.sleep(5)
-            if ws_manager.console_status and ws_manager.console_status.has_changed():
-                ws_manager.console_status.print_status()
+            await asyncio.sleep(1)
+            if ws_manager.console_status:
+                ws_manager.console_status.refresh()
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.error(f"Console update error: {e}")
+
+
+def _console_runtime_snapshot() -> dict:
+    qsize = ws_manager._processing_queue.qsize() if ws_manager._processing_queue else 0
+    queue_max = config.get("processing", {}).get("queue_max_size", 500)
+    try:
+        queue_max = max(1, int(queue_max))
+    except (TypeError, ValueError):
+        queue_max = 500
+    return {
+        "active_connections": len(ws_manager.active_connections),
+        "processing_queue_size": qsize,
+        "queue_max_size": queue_max,
+        "worker_count": getattr(ws_manager, "_worker_count", 1),
+        "stt_concurrency": getattr(ws_manager, "_stt_concurrency", 1),
+    }
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -747,7 +766,8 @@ async def lifespan(app: FastAPI):
         get_storage().ensure_prefix(rb_path)
     await ws_manager.initialize(config)
     if ws_manager.console_status:
-        ws_manager.console_status.print_status(force=True)
+        ws_manager.console_status.attach_runtime(_console_runtime_snapshot)
+        ws_manager.console_status.start()
     ws_manager._console_update_task = asyncio.create_task(console_update_task())
     global cdn_load_monitor
     if cdn_load_enabled(config):
@@ -766,6 +786,8 @@ async def lifespan(app: FastAPI):
             await ws_manager._console_update_task
         except asyncio.CancelledError:
             pass
+    if ws_manager.console_status:
+        ws_manager.console_status.stop()
     for task in ws_manager._worker_tasks:
         task.cancel()
     for task in ws_manager._worker_tasks:
