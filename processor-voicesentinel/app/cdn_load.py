@@ -115,20 +115,21 @@ def compute_load_metrics(ws_manager: Any, config: dict) -> dict[str, Any]:
         queue_max = 500
 
     qsize = ws_manager._processing_queue.qsize() if ws_manager._processing_queue else 0
-    queue_util = 100.0 * min(qsize, queue_max) / queue_max
+    # Bound depth so utilization never exceeds 100% if the queue is over capacity.
+    bounded_qsize = min(qsize, queue_max)
+    queue_util = 100.0 * bounded_qsize / queue_max
 
     active_sessions = len(ws_manager.active_connections)
-    max_sessions = max(10, queue_max // 5)
-    session_util = 100.0 * min(active_sessions, max_sessions) / max_sessions
-
     cpu_percent = _cpu_percent()
-    raw = max(queue_util, session_util, cpu_percent)
-    server_load = max(1, min(100, round(raw)))
+    # Directory load is queue depth / max only — CPU and sessions are informational.
+    server_load = max(1, min(100, round(queue_util)))
 
     return {
         "serverLoad": server_load,
         "activeSessions": active_sessions,
         "cpuPercent": round(cpu_percent, 2),
+        "processingQueueSize": qsize,
+        "queueMaxSize": queue_max,
         "queueUtilizationPercent": round(queue_util, 2),
     }
 
@@ -179,6 +180,9 @@ async def post_load_report(ws_manager: Any, config: dict) -> bool:
         "serverLoad": metrics["serverLoad"],
         "activeSessions": metrics["activeSessions"],
         "cpuPercent": metrics["cpuPercent"],
+        "processingQueueSize": metrics["processingQueueSize"],
+        "queueMaxSize": metrics["queueMaxSize"],
+        "queueUtilizationPercent": metrics["queueUtilizationPercent"],
     }
     status, _ = await asyncio.to_thread(
         _http_json,
@@ -189,9 +193,10 @@ async def post_load_report(ws_manager: Any, config: dict) -> bool:
     )
     if status and 200 <= status < 300:
         logger.debug(
-            "CDN load report ok serverLoad=%s activeSessions=%s cpuPercent=%s",
+            "CDN load report ok serverLoad=%s queue=%s/%s cpuPercent=%s",
             metrics["serverLoad"],
-            metrics["activeSessions"],
+            metrics["processingQueueSize"],
+            metrics["queueMaxSize"],
             metrics["cpuPercent"],
         )
         return True
