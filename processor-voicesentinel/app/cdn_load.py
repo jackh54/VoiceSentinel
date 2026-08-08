@@ -122,7 +122,8 @@ def compute_load_metrics(ws_manager: Any, config: dict) -> dict[str, Any]:
     active_sessions = len(ws_manager.active_connections)
     cpu_percent = _cpu_percent()
     # Directory load is queue depth / max only — CPU and sessions are informational.
-    server_load = max(1, min(100, round(queue_util)))
+    # Empty queue must report 0 (not 1) so balancers prefer idle processors.
+    server_load = max(0, min(100, round(queue_util)))
 
     return {
         "serverLoad": server_load,
@@ -222,7 +223,7 @@ def _parse_server_rows(rows: Any, self_server_ip: str) -> list[dict]:
             load = int(row.get("serverLoad", 100))
         except (TypeError, ValueError):
             load = 100
-        load = max(1, min(100, load))
+        load = max(0, min(100, load))
         peers.append({"serverIp": ip_trim, "serverLoad": load})
     return peers
 
@@ -377,6 +378,18 @@ class CdnLoadMonitor:
             )
             return
 
+        best_hv = pick_lowest_load(directory["highVolumeServers"])
+        if not best_hv:
+            return
+        # Don't shove more servers onto HV when it's already worse than this processor.
+        if best_hv["serverLoad"] + 10 >= metrics["serverLoad"]:
+            logger.info(
+                "Skipping heavy-client move; high_volume load=%s is not better than local load=%s",
+                best_hv["serverLoad"],
+                metrics["serverLoad"],
+            )
+            return
+
         now = time.time()
         for client_id, count in sorted(heavy_clients, key=lambda item: item[1], reverse=True):
             last = self._last_heavy_move_at.get(client_id, 0.0)
@@ -401,7 +414,7 @@ class CdnLoadMonitor:
             payload = {
                 "reason": "load",
                 "serverLoad": metrics["serverLoad"],
-                "bestOtherLoad": pick_lowest_load(directory["highVolumeServers"])["serverLoad"],
+                "bestOtherLoad": best_hv["serverLoad"],
             }
             sent = await self.ws_manager.send_rebalance(client_id, payload)
             if sent:
