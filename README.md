@@ -30,6 +30,10 @@ VoiceSentinel is a real-time voice moderation system for Minecraft servers using
 - Simple Voice Chat integration (default)
 - PlasmoVoice integration (`voice_backend: PLASMOVOICE` or `AUTO`)
 
+### Live monitoring dashboard (plugin v3.3.1+)
+- "Live monitoring" tab in the web dashboard: live transcript stream, flagged-event feed, and per-player voice history.
+- A standard part of the plugin — the whole plugin requires a valid license, so these panels work on any licensed install. Individual panels can be toggled in `config.yml`.
+
 ### Voice reports (plugin v2.2.1+)
 - In-memory rolling transcript buffer per player (all final transcripts, not only flagged lines).
 - `/reportvoice <player> [minutes]` (or a chest GUI when `voice_report.interface` is `gui`) notifies staff with `voicesentinel.report.review`. Staff see a compact chat line with a clickable **Open book** action (and the same command printed: `/viewreport <player> <minutes>` matching the report window).
@@ -163,6 +167,23 @@ Clients also send a signed handshake (`client_version` + `client_sig`, an HMAC o
 license/product/version). The processor recomputes it and records `client_integrity`
 (`ok` / `mismatch` / `absent`) per connection, so tampered or rebuilt clients are
 flagged in the audit log even when they present a valid key.
+
+### Live monitoring dashboard (plugin)
+
+The web dashboard includes a "Live monitoring" tab with three panels:
+
+- **Live transcript stream** — recent buffered transcript lines across every online speaker, newest first, flagged lines highlighted.
+- **Flagged-event feed** — recent flagged voice lines plus the unreviewed-report count.
+- **Per-player voice history** — one player's recent transcript, processor evidence, and mute history in a single view.
+
+This is a standard part of the plugin, not a separate add-on. The whole plugin requires a valid
+license to run at all, and license verification is applied throughout (see the server-side and
+integrity sections above), so these panels are available on any licensed install. The richest
+data — processor evidence/audio — comes through `/report/evidence` and `/report/audio`, which
+verify the license server-side, so the information is only ever served to a verified client.
+
+Each panel can be toggled independently in the plugin `config.yml` under the web dashboard
+settings (all default on).
 
 ## Monitoring and Logging
 
