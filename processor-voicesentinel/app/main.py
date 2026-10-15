@@ -1019,6 +1019,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                     # the license check below is the real enforcement.
                     client_version = str(data.get("client_version") or "")
                     client_sig = str(data.get("client_sig") or "")
+                    client_state = str(data.get("client_state") or "")
                     expected_sig = client_handshake_signature(
                         server_key, license_plain, license_verifier.product_id, client_version
                     )
@@ -1042,6 +1043,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                             verify_message=decision.message,
                             client_integrity=client_integrity,
                             client_version=client_version,
+                            client_state=client_state,
                         )
                         logger.warning(
                             "License rejected for %s from %s (%s, integrity=%s): %s",
@@ -1072,6 +1074,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                         verify_reason=decision.reason,
                         client_integrity=client_integrity,
                         client_version=client_version,
+                        client_state=client_state,
                     )
                     if decision.status in ("grace", "log_only_flagged"):
                         logger.warning(
@@ -1079,10 +1082,10 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                             decision.status, fingerprint[:12] or "<none>",
                             remote_ip or "?", decision.message,
                         )
-                    if client_integrity != "ok":
+                    if client_integrity != "ok" or client_state not in ("", "armed"):
                         logger.warning(
-                            "Client integrity '%s' for %s from %s (version=%s) — possible tampered/cracked client",
-                            client_integrity, fingerprint[:12] or "<none>",
+                            "Client integrity '%s' state '%s' for %s from %s (version=%s) — possible tampered/cracked client",
+                            client_integrity, client_state or "?", fingerprint[:12] or "<none>",
                             remote_ip or "?", client_version or "?",
                         )
                     await ws_manager.send_message(client_id, {"type": "auth_success"})
