@@ -23,6 +23,11 @@ from app.storage import init_storage, get_storage, storage_key
 from app.llm_profanity import LLMProfanityDetector
 from app.console_status import ConsoleStatus
 from app.pool_audit import setup_pool_audit, pool_audit_emit, pool_transcript_append
+from app.license_verify import (
+    LicenseVerifier,
+    client_handshake_signature,
+    classify_client_integrity,
+)
 from app.report_buffer import (
     report_buffer_append_async,
     query_report_evidence,
@@ -761,6 +766,10 @@ async def lifespan(app: FastAPI):
             "Public pool processor: set server.server_key in config.json "
             "(gitignored) to match the plugin pool auth key"
         )
+    if license_verifier.enabled:
+        logger.info("Server-side license enforcement: %s", license_verifier.describe())
+    else:
+        logger.info("Server-side license enforcement: disabled")
     rb_path = (config.get("report_buffer") or {}).get("path", "report_buffer/")
     if rb_path:
         get_storage().ensure_prefix(rb_path)
@@ -797,6 +806,7 @@ async def lifespan(app: FastAPI):
             pass
 
 config = load_config()
+license_verifier = LicenseVerifier(config)
 
 app = FastAPI(
     title="VoiceSentinel Processor",
@@ -818,6 +828,26 @@ app.add_middleware(
 @app.get("/health")
 async def health_check():
     return {"status": "healthy", "version": VERSION}
+
+async def _enforce_license_http(license_plain: str, fingerprint: str, remote_ip: str, context: str) -> None:
+    """Gate a premium HTTP endpoint on a genuinely valid license (not just a key being
+    present), reusing the same verifier as the WebSocket path. Makes cloud evidence /
+    report-sync useless on a cracked client, which cannot produce a valid license."""
+    decision = await license_verifier.verify(license_plain, fingerprint)
+    if not decision.allow:
+        pool_audit_emit(
+            config, "license_rejected", context, fingerprint,
+            license_key=license_plain, remote_ip=remote_ip,
+            reason=decision.reason, verify_status=decision.status,
+            verify_message=decision.message,
+        )
+        logger.warning(
+            "%s rejected for %s from %s (%s): %s",
+            context, fingerprint[:12] or "<none>", remote_ip or "?",
+            decision.reason, decision.message,
+        )
+        raise HTTPException(status_code=403, detail="License verification failed")
+
 
 @app.get("/report/evidence")
 async def report_evidence(
@@ -849,6 +879,7 @@ async def report_evidence(
         client_ip = ""
     if not await check_evidence_rate_limits(fp_ev, client_ip):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
+    await _enforce_license_http(license_key.strip(), fp_ev, client_ip, "report_evidence")
     cfg_key = effective_server_key(config)
     sk_for_query = ""
     if cfg_key:
@@ -896,6 +927,7 @@ async def report_audio(
         client_ip = ""
     if not await check_evidence_rate_limits(fp_ev, client_ip):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
+    await _enforce_license_http(license_key.strip(), fp_ev, client_ip, "report_audio")
     cfg_key = effective_server_key(config)
     sk_for_query = ""
     if cfg_key:
@@ -981,6 +1013,49 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                     return
 
                 if server_key == expected_key:
+                    # Client integrity / version signal (tamper detection). Recompute the
+                    # plugin's handshake HMAC; a crack that stubbed or rebuilt the auth path
+                    # will not reproduce it. This is a flag for the audit log, not a gate —
+                    # the license check below is the real enforcement.
+                    client_version = str(data.get("client_version") or "")
+                    client_sig = str(data.get("client_sig") or "")
+                    expected_sig = client_handshake_signature(
+                        server_key, license_plain, license_verifier.product_id, client_version
+                    )
+                    client_integrity = classify_client_integrity(expected_sig, client_sig)
+
+                    # Server-side license check — the enforcement point a cracked jar
+                    # cannot patch out, because it runs here on the processor. A patched
+                    # client that bypassed its own LicenseManager still fails here unless
+                    # it holds a genuinely valid, active license for this product.
+                    decision = await license_verifier.verify(license_plain, fingerprint)
+                    if not decision.allow:
+                        pool_audit_emit(
+                            config,
+                            "license_rejected",
+                            client_id,
+                            fingerprint,
+                            license_key=license_plain,
+                            remote_ip=remote_ip,
+                            reason=decision.reason,
+                            verify_status=decision.status,
+                            verify_message=decision.message,
+                            client_integrity=client_integrity,
+                            client_version=client_version,
+                        )
+                        logger.warning(
+                            "License rejected for %s from %s (%s, integrity=%s): %s",
+                            fingerprint[:12] or "<none>", remote_ip or "?",
+                            decision.reason, client_integrity, decision.message,
+                        )
+                        await ws_manager.send_message(client_id, {
+                            "type": "auth_failed",
+                            "reason": "License verification failed",
+                        })
+                        await websocket.close()
+                        ws_manager.disconnect(client_id, skip_pool_disconnect_audit=True)
+                        return
+
                     authenticated = True
                     ws_manager.set_client_license(client_id, fingerprint, license_plain)
                     ws_manager.set_auth_server_key(
@@ -993,7 +1068,23 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                         fingerprint,
                         license_key=license_plain,
                         remote_ip=remote_ip,
+                        verify_status=decision.status,
+                        verify_reason=decision.reason,
+                        client_integrity=client_integrity,
+                        client_version=client_version,
                     )
+                    if decision.status in ("grace", "log_only_flagged"):
+                        logger.warning(
+                            "License allowed with flag '%s' for %s from %s: %s",
+                            decision.status, fingerprint[:12] or "<none>",
+                            remote_ip or "?", decision.message,
+                        )
+                    if client_integrity != "ok":
+                        logger.warning(
+                            "Client integrity '%s' for %s from %s (version=%s) — possible tampered/cracked client",
+                            client_integrity, fingerprint[:12] or "<none>",
+                            remote_ip or "?", client_version or "?",
+                        )
                     await ws_manager.send_message(client_id, {"type": "auth_success"})
                 else:
                     pool_audit_emit(

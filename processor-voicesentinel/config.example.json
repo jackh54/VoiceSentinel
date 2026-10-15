@@ -15,6 +15,20 @@
     "port": 28472,
     "server_key": ""
   },
+  "license_enforcement": {
+    "enabled": true,
+    "mode": "enforce",
+    "product_id": "72862",
+    "verify_urls": [
+      "https://key.pandascript.dev/api/client/verify",
+      "https://pandascript-license-worker.pandascript.workers.dev/api/client/verify"
+    ],
+    "cache_ttl_seconds": 900,
+    "negative_cache_seconds": 120,
+    "grace_seconds": 3600,
+    "timeout_seconds": 8,
+    "_comment": "Server-side license check that a cracked plugin jar cannot bypass (it runs on the processor, not in the client). enabled: true/false; if you remove this whole block the default is ON for pool_server processors and OFF for self-hosted. mode: 'enforce' rejects invalid/expired/inactive licenses; 'log_only' records them (with IP) in the pool audit log but still serves them, so you can see who is cracking before you flip enforcement on. grace_seconds: a license that verified OK within this window keeps working if the key API is briefly unreachable, so a Cloudflare/key-API outage does not disconnect paying customers; a never-verified license is still rejected during an outage. cache_ttl_seconds: how long a good result is trusted before re-checking."
+  },
   "transcription": {
     "model": "Systran/faster-whisper-base",
     "language": "auto",

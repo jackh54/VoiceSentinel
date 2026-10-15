@@ -142,6 +142,28 @@ For prerequisites, secrets, R2 bindings, sizing, and deploy steps, see [processo
 
 For security vulnerabilities, see SECURITY.md.
 
+### Server-side license enforcement (processor)
+
+The processor verifies each connecting client's license against the PandaScript key
+API before doing any work, and again on the `/report/evidence` and `/report/audio`
+endpoints. Because this runs on the processor, a patched/cracked plugin jar cannot
+bypass it: even if the client-side `LicenseManager` is defeated, a connection with an
+invalid, expired, or inactive license is rejected and logged (with IP) in the pool
+audit log. Premium report-evidence sync therefore only works for valid licenses.
+
+Configure it under `license_enforcement` in the processor `config.json` (see
+`config.example.json`):
+
+- `enabled` — `true`/`false`. Omit the block to default ON for pool processors, OFF for self-hosted.
+- `mode` — `enforce` (reject bad licenses) or `log_only` (record offender IPs without disconnecting, for a safe rollout).
+- `grace_seconds` — a license verified OK within this window keeps working if the key API is briefly unreachable, so an upstream outage never disconnects paying customers; never-verified licenses are still rejected during an outage.
+- `cache_ttl_seconds`, `verify_urls`, `product_id`, `timeout_seconds` — tuning / endpoints.
+
+Clients also send a signed handshake (`client_version` + `client_sig`, an HMAC over the
+license/product/version). The processor recomputes it and records `client_integrity`
+(`ok` / `mismatch` / `absent`) per connection, so tampered or rebuilt clients are
+flagged in the audit log even when they present a valid key.
+
 ## Monitoring and Logging
 
 ### Log Files
