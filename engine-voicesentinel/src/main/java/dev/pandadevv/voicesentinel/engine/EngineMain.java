@@ -175,6 +175,9 @@ public final class EngineMain extends WebSocketServer {
             out.addProperty("stt_time_ms", sttMs);
             out.addProperty("moderation_time_ms", totalMs - sttMs);
             out.addProperty("processing_time_ms", totalMs);
+            if (out.get("flagged").getAsBoolean()) {
+                out.addProperty("audio_data", Base64.getEncoder().encodeToString(wav));
+            }
             if (conn.isOpen()) {
                 conn.send(out.toString());
             }
