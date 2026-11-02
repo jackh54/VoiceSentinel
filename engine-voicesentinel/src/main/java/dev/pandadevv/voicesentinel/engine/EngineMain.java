@@ -140,7 +140,8 @@ public final class EngineMain extends WebSocketServer {
         }
         state.buffers.remove(sessionId);
         byte[] whole = buffer.size() == 0 ? audio : concat(buffer.toByteArray(), audio);
-        Moderator.Words words = wordsFor(state, language);
+        // The multi-language model does not report what was spoken, so every list applies.
+        Moderator.Words words = speech.canConfirm() ? wordsFor(state, language) : allWords(state);
         try {
             worker.execute(() -> process(conn, whole, words, partial, caseSensitive, player, sessionId, language));
         } catch (java.util.concurrent.RejectedExecutionException e) {
@@ -159,6 +160,17 @@ public final class EngineMain extends WebSocketServer {
         String lang = language == null ? "" : language.toLowerCase(Locale.ROOT).split("[-_]")[0];
         Moderator.Words match = state.languages.get(lang);
         return match != null ? match : new Moderator.Words(state.profanity, List.of());
+    }
+
+    private static Moderator.Words allWords(ClientState state) {
+        List<String> profanity = new ArrayList<>(state.profanity);
+        List<String> mute = new ArrayList<>();
+        state.languages.values().forEach(words -> {
+            profanity.addAll(words.profanity());
+            mute.addAll(words.mute());
+        });
+        profanity.removeAll(mute);
+        return new Moderator.Words(profanity, mute);
     }
 
     private void process(WebSocket conn, byte[] wav, Moderator.Words words, boolean partial, boolean caseSensitive,
