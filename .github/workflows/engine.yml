@@ -1,0 +1,32 @@
+name: engine
+on:
+  push:
+    tags: ['engine-v*']
+    paths-ignore: []
+  pull_request:
+    paths: ['engine-voicesentinel/**']
+
+permissions:
+  contents: write
+
+jobs:
+  engine:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: engine-voicesentinel
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - run: mvn -B -q verify
+      - if: startsWith(github.ref, 'refs/tags/')
+        run: ./package.sh
+      - if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" release/* --title "$GITHUB_REF_NAME" --notes "VoiceSentinel on-server speech engine."
