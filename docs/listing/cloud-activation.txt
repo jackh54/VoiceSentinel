@@ -1,0 +1,30 @@
+VoiceSentinel Cloud - Activation
+================================
+
+VoiceSentinel Cloud is an add-on for the VoiceSentinel plugin. There is no
+separate plugin to install. Buying this unlocks Cloud for your VoiceSentinel
+licence.
+
+What you get
+------------
+- Every flag and mute from all your servers in one dashboard at
+  https://cloud.pandascript.dev
+- Discord alerts with Unmute, Extend and Dismiss buttons
+- A private appeal link for muted players
+
+Turn it on
+----------
+1. Make sure you are on VoiceSentinel 3.6.0 or newer.
+2. In plugins/VoiceSentinel/config.yml set:
+     cloud:
+       enabled: true
+3. Run /vs reload (or restart). Check status with /vs cloud.
+4. Sign in at https://cloud.pandascript.dev with your VoiceSentinel licence
+   key to see your dashboard and link Discord.
+
+Notes
+-----
+- Cloud needs VoiceSentinel itself, sold separately on BuiltByBit.
+- Everyone who bought VoiceSentinel before 3 November 2026 already has Cloud
+  for free and does not need this.
+- Support: https://discord.gg/JAJyuzdgHZ
