@@ -36,7 +36,7 @@ final class SpeechEngine implements AutoCloseable {
             .build();
         return OfflineModelConfig.builder().setTransducer(transducer)
             .setTokens(dir.resolve("tokens.txt").toString())
-            .setModelType("nemo_transducer").setNumThreads(threads).build();
+            .setModelType("nemo_transducer").setNumThreads(threads).setDebug(false).build();
     }
 
     private static OfflineModelConfig moonshineModel(Path dir, int threads) {
@@ -47,7 +47,7 @@ final class SpeechEngine implements AutoCloseable {
             .setCachedDecoder(dir.resolve("cached_decode.int8.onnx").toString())
             .build();
         return OfflineModelConfig.builder().setMoonshine(moonshine)
-            .setTokens(dir.resolve("tokens.txt").toString()).setNumThreads(threads).build();
+            .setTokens(dir.resolve("tokens.txt").toString()).setNumThreads(threads).setDebug(false).build();
     }
 
     String transcribe(WavDecoder.Pcm pcm) {
