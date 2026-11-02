@@ -22,13 +22,33 @@ class ModeratorTest {
         JsonObject out = run("you loser", "such a loser");
         assertTrue(out.get("flagged").getAsBoolean());
         assertEquals("confirmed", out.get("double_check").getAsString());
+        assertEquals("confirmed", out.get("confirmation").getAsString());
     }
 
     @Test
-    void secondModelCanDropAMishear() {
+    void secondModelDisagreeingStillEmitsTheHitMarkedRejected() {
         JsonObject out = run("you loser", "you looser");
-        assertFalse(out.get("flagged").getAsBoolean());
+        assertTrue(out.get("flagged").getAsBoolean());
+        assertEquals("rejected", out.get("confirmation").getAsString());
         assertEquals("rejected", out.get("double_check").getAsString());
+        assertEquals("loser", out.getAsJsonArray("bad_words").get(0).getAsString());
+    }
+
+    @Test
+    void rejectedMuteWordIsReportedButNeverShouldMute() {
+        JsonObject out = run("a slur here", "nothing");
+        assertTrue(out.get("flagged").getAsBoolean());
+        assertFalse(out.get("should_mute").getAsBoolean());
+        assertEquals("slur", out.getAsJsonArray("mute_words").get(0).getAsString());
+        assertEquals("rejected", out.get("confirmation").getAsString());
+    }
+
+    @Test
+    void noSecondModelMeansUnchecked() {
+        JsonObject out = run("you loser", null);
+        assertTrue(out.get("flagged").getAsBoolean());
+        assertEquals("unchecked", out.get("confirmation").getAsString());
+        assertEquals("unchecked", run("hello there", "hello there").get("confirmation").getAsString());
     }
 
     @Test

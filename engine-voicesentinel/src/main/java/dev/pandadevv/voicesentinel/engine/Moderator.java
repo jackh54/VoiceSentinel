@@ -7,7 +7,12 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Function;
 
-/** Turns one transcript into a final_transcript message. */
+/**
+ * Turns one transcript into a final_transcript message. When the second model disagrees the hit is
+ * still sent, marked {@code confirmation: "rejected"} and never as should_mute, so the plugin can
+ * show staff an unconfirmed flag without acting on it. {@code confirmation} is "confirmed",
+ * "rejected" or "unchecked" (no second model, or nothing was flagged).
+ */
 final class Moderator {
     record Words(List<String> profanity, List<String> mute) {
     }
@@ -27,16 +32,20 @@ final class Moderator {
         List<String> profanity = WordMatcher.find(transcript, words.profanity(), partialMatch, caseSensitive);
         List<String> mute = WordMatcher.find(transcript, words.mute(), partialMatch, caseSensitive);
         String check = "skipped";
+        boolean rejected = false;
         if ((!profanity.isEmpty() || !mute.isEmpty()) && confirmTranscript != null) {
             String second = confirmTranscript.apply(null);
             List<String> all = new ArrayList<>(profanity);
             all.addAll(mute);
             List<String> agreed = WordMatcher.find(second, all, partialMatch, caseSensitive);
-            profanity.retainAll(agreed);
-            mute.retainAll(agreed);
-            check = agreed.isEmpty() ? "rejected" : "confirmed";
+            rejected = agreed.isEmpty();
+            if (!rejected) {
+                profanity.retainAll(agreed);
+                mute.retainAll(agreed);
+            }
+            check = rejected ? "rejected" : "confirmed";
         }
-        boolean shouldMute = !mute.isEmpty();
+        boolean shouldMute = !mute.isEmpty() && !rejected;
         List<String> flagged = new ArrayList<>(profanity);
         flagged.addAll(mute);
 
@@ -52,6 +61,7 @@ final class Moderator {
         out.addProperty("session_id", sessionId);
         out.addProperty("detected_language", language);
         out.addProperty("double_check", check);
+        out.addProperty("confirmation", "skipped".equals(check) ? "unchecked" : check);
         return out;
     }
 
