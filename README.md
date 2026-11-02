@@ -228,7 +228,7 @@ See LICENSE file for details.
 - On-Server Mode: no Docker, no cloud, audio stays on your machine
 - Double Check: a second speech model confirms hits in English On-Server Mode
 - Consent options: join notice or confirm/deny menu, with optional kick
-- 7-day signed license lease, developer API events, `/vs test` and `/vs debug`
+- 1-day signed license lease, developer API events, `/vs test` and `/vs debug`
 
 ### Processor 3.3.1
 - Fix race condition in report buffer retention cleanup (GHSA-vhqx-3242-77j7)
