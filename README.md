@@ -1,10 +1,19 @@
 # VoiceSentinel
 
-[![Java](https://img.shields.io/badge/Java-17-orange.svg)](https://www.oracle.com/java/)
+[![Java](https://img.shields.io/badge/Java-21-orange.svg)](https://www.oracle.com/java/)
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![Minecraft](https://img.shields.io/badge/Minecraft-1.21+-green.svg)](https://www.minecraft.net/)
 
-VoiceSentinel is a real-time voice moderation system for Minecraft servers using **Simple Voice Chat** or **PlasmoVoice**. It combines a Java plugin with a Python processor for speech-to-text transcription and content filtering.
+VoiceSentinel is a real-time voice moderation system for Minecraft servers using **Simple Voice Chat** or **PlasmoVoice**.
+
+This public repo holds the speech components. The Minecraft plugin is closed source and [sold on BuiltByBit](https://builtbybit.com/voicesentinel).
+
+| Folder | What it is |
+|---|---|
+| `engine-voicesentinel/` | On-Server speech engine the plugin downloads in LOCAL mode. No Docker or Python needed. |
+| `processor-voicesentinel/` | Python processor for the public pool and self-hosting. |
+
+Three ways to run it: **On-Server** (`LOCAL`), **Public Pool** (`PUBLIC`) or **Self-Hosted** (`CUSTOM`).
 
 ## Features
 
@@ -43,11 +52,12 @@ VoiceSentinel is a real-time voice moderation system for Minecraft servers using
 ## Requirements
 
 ### Server Requirements
-- Java 17+ for the Minecraft plugin
+- Java 21+ for the Minecraft plugin
 - Python 3.8+ for the processor
 - Minecraft 1.21+ Folia or Paper
 - Simple Voice Chat **or** PlasmoVoice (not both)
-- Minimum 4GB RAM (8GB+ recommended)
+- Self-hosted processor: 4GB RAM minimum (8GB+ recommended)
+- On-Server Mode: about 1GB free RAM for English, about 2.5GB for multi-language
 - Multi-core CPU
 
 ### Dependencies
@@ -212,22 +222,15 @@ See LICENSE file for details.
 - Issues: [GitHub Issues](https://github.com/jackh54/VoiceSentinel/issues)
 - Security: security@pandadevv.dev
 
-## Roadmap
+## Changelog
 
-### Version 3.3.1 (Current)
+### Plugin 3.5.0
+- On-Server Mode: no Docker, no cloud, audio stays on your machine
+- Double Check: a second speech model confirms hits in English On-Server Mode
+- Consent options: join notice or confirm/deny menu, with optional kick
+- 7-day signed license lease, developer API events, `/vs test` and `/vs debug`
+
+### Processor 3.3.1
 - Fix race condition in report buffer retention cleanup (GHSA-vhqx-3242-77j7)
-
-### Version 3.3.0
-- Migrated to Faster Whisper large-v3 model
-- Multi-language support with auto-detection
-- Recording save functionality
-- Simplified configuration
-- Improved performance
-- Audio clip attachments for Discord webhooks
-
-### Future Plans
-- Web dashboard
-- Player reputation system
-- Microservices architecture for scalability
 
 Built by pandadevv
