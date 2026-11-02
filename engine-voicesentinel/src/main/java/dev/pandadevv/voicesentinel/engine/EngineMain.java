@@ -115,8 +115,8 @@ public final class EngineMain extends WebSocketServer {
             } else if ("audio_chunk".equals(type) && state.authenticated) {
                 handleAudio(conn, state, data);
             }
-        } catch (RuntimeException e) {
-            System.err.println("Engine message error: " + e.getMessage());
+        } catch (Throwable e) {
+            System.err.println("Engine message error: " + e);
         }
     }
 
@@ -178,11 +178,13 @@ public final class EngineMain extends WebSocketServer {
             if (out.get("flagged").getAsBoolean()) {
                 out.addProperty("audio_data", Base64.getEncoder().encodeToString(wav));
             }
+            System.out.println("clip " + Math.round(pcm.seconds() * 1000) + "ms took " + totalMs + "ms check="
+                + out.get("double_check").getAsString());
             if (conn.isOpen()) {
                 conn.send(out.toString());
             }
-        } catch (RuntimeException e) {
-            System.err.println("Engine processing error: " + e.getMessage());
+        } catch (Throwable e) {
+            System.err.println("Engine processing error: " + e);
         }
     }
 
