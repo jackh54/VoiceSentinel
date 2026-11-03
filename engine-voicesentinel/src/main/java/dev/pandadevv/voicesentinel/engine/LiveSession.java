@@ -42,6 +42,7 @@ final class LiveSession {
     private final WordCooldown cooldown = new WordCooldown(LiveEngine.COOLDOWN_MS);
     private long clockMs;
     private String utteranceId;
+    private final java.util.LinkedHashSet<String> finished = new java.util.LinkedHashSet<>();
     private boolean streamed;
     private float[] utterance = new float[0];
     private int utteranceLength;
@@ -117,6 +118,10 @@ final class LiveSession {
             List<CompletableFuture<Void>> waiting = pending;
             boolean wasStreamed = streamed;
             end();
+            finished.add(request.utteranceId());
+            if (finished.size() > 8) {
+                finished.remove(finished.iterator().next());
+            }
             backstop.run(request, whole, sent, wasStreamed, waiting);
         });
     }
@@ -127,6 +132,9 @@ final class LiveSession {
     }
 
     private void onChunk(Request request, String audioBase64, boolean backedUp) {
+        if (finished.contains(request.utteranceId())) {
+            return; // a late chunk for an utterance that already got its final
+        }
         if (!request.utteranceId().equals(utteranceId)) {
             begin(request.utteranceId());
         }
@@ -220,8 +228,14 @@ final class LiveSession {
         JsonObject out = Moderator.result(transcript, request.words(), request.partialMatch(),
             request.caseSensitive(), ignored -> speech.confirmTranscript(window),
             request.player(), request.sessionId(), request.language());
-        if (!out.get("flagged").getAsBoolean()) {
-            return;
+        // Drop words an earlier partial_hit of this utterance already reported. Checking and recording happen
+        // under one lock so two concurrent Double Checks cannot both report the same word.
+        synchronized (sent) {
+            LiveDedupe.strip(out, new HashSet<>(sent));
+            if (!out.get("flagged").getAsBoolean()) {
+                return;
+            }
+            out.getAsJsonArray("bad_words").forEach(word -> sent.add(word.getAsString()));
         }
         long totalMs = (System.nanoTime() - start) / 1_000_000L;
         out.addProperty("type", "partial_hit");
@@ -232,8 +246,6 @@ final class LiveSession {
         out.addProperty("processing_time_ms", totalMs);
         out.addProperty("audio_data",
             Base64.getEncoder().encodeToString(WavEncoder.encode(window.samples(), window.sampleRate())));
-        // Mark the words as reported before sending so the backstop never repeats them.
-        out.getAsJsonArray("bad_words").forEach(word -> sent.add(word.getAsString()));
         System.out.println("partial_hit " + out.get("bad_words") + " took " + totalMs + "ms check="
             + out.get("double_check").getAsString());
         if (request.conn().isOpen()) {

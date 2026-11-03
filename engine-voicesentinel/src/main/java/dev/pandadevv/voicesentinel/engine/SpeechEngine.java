@@ -14,6 +14,8 @@ import java.nio.file.Path;
 final class SpeechEngine implements AutoCloseable {
     private final OfflineRecognizer primary;
     private final OfflineRecognizer confirm;
+    // Live Double Check and the whole-utterance pass call in from different threads; run one at a time.
+    private final java.util.concurrent.locks.ReentrantLock lock = new java.util.concurrent.locks.ReentrantLock();
 
     SpeechEngine(Path modelDir, int threads) {
         Path transducer = modelDir.resolve("primary");
@@ -62,7 +64,16 @@ final class SpeechEngine implements AutoCloseable {
         return run(confirm, pcm);
     }
 
-    private static String run(OfflineRecognizer recognizer, WavDecoder.Pcm pcm) {
+    private String run(OfflineRecognizer recognizer, WavDecoder.Pcm pcm) {
+        lock.lock();
+        try {
+            return decode(recognizer, pcm);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private static String decode(OfflineRecognizer recognizer, WavDecoder.Pcm pcm) {
         OfflineStream stream = recognizer.createStream();
         try {
             stream.acceptWaveform(pcm.samples(), pcm.sampleRate());

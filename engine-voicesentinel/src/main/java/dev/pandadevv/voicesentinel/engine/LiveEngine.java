@@ -89,24 +89,25 @@ final class LiveEngine implements AutoCloseable {
         return text.toString();
     }
 
-    OnlineStream createStream(String keywords) {
+    synchronized OnlineStream createStream(String keywords) {
         return spotter.createStream(keywords);
     }
 
-    boolean isReady(OnlineStream stream) {
+    // The shared spotter is only entered by one lane at a time; each stream belongs to a single session lane.
+    synchronized boolean isReady(OnlineStream stream) {
         return spotter.isReady(stream);
     }
 
-    void decode(OnlineStream stream) {
+    synchronized void decode(OnlineStream stream) {
         spotter.decode(stream);
     }
 
-    String hit(OnlineStream stream) {
+    synchronized String hit(OnlineStream stream) {
         String keyword = spotter.getResult(stream).getKeyword();
         return keyword == null ? "" : keyword;
     }
 
-    void reset(OnlineStream stream) {
+    synchronized void reset(OnlineStream stream) {
         spotter.reset(stream);
     }
 
