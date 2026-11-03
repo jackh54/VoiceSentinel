@@ -224,6 +224,12 @@ See LICENSE file for details.
 
 ## Changelog
 
+### Plugin 3.8.0 / Engine 1.1.0
+- Live detection in On-Server Mode: a listed word is caught while the player is still talking, about 0.7 s after the word on a modern CPU
+- Every live hit is confirmed by Double Check; the end-of-sentence check stays as a backstop
+- New default word list: whole-word matching, a filled moderate tier, self-harm phrases and slurs as mute words
+- Cleaner console and chat messages, one line per mute or flag
+
 ### Plugin 3.5.0
 - On-Server Mode: no Docker, no cloud, audio stays on your machine
 - Double Check: a second speech model confirms hits in English On-Server Mode
