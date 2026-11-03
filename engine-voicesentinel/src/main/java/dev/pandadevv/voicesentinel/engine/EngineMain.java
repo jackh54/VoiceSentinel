@@ -32,8 +32,13 @@ public final class EngineMain extends WebSocketServer {
     private final String key;
     private final SpeechEngine speech;
     private final LiveEngine live;
+    // Finals from different players must not queue behind each other; decoding separate streams is thread safe.
+    private static final int WORKERS = Math.max(1, Math.min(2, Runtime.getRuntime().availableProcessors()));
     private final ThreadPoolExecutor worker = new ThreadPoolExecutor(
-        1, 1, 0L, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(64));
+        WORKERS, WORKERS, 0L, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(64));
+    // Runs a confirm pass alongside a final's primary pass; separate from worker so workers never wait on it.
+    private final ThreadPoolExecutor confirmPool = new ThreadPoolExecutor(
+        WORKERS, WORKERS, 0L, TimeUnit.MILLISECONDS, new java.util.concurrent.LinkedBlockingQueue<>());
     private final Map<WebSocket, ClientState> clients = new ConcurrentHashMap<>();
 
     private static final class ClientState {
@@ -191,7 +196,7 @@ public final class EngineMain extends WebSocketServer {
         long queuedAt = System.nanoTime();
         try {
             worker.execute(() -> process(conn, whole, null, words, partial, caseSensitive, player, sessionId, language,
-                Set.of(), MIN_AUDIO_SECONDS, queuedAt));
+                Set::of, false, MIN_AUDIO_SECONDS, queuedAt));
         } catch (java.util.concurrent.RejectedExecutionException e) {
             System.err.println("Engine queue full, dropped clip for " + player);
         }
@@ -222,22 +227,25 @@ public final class EngineMain extends WebSocketServer {
     }
 
     private void liveBackstop(LiveSession.Request request, WavDecoder.Pcm whole, Set<String> alreadySent,
-                              boolean streamed, List<CompletableFuture<Void>> pending) {
+                              boolean streamed, List<CompletableFuture<Void>> pending,
+                              java.util.concurrent.atomic.AtomicBoolean suspect) {
         long queuedAt = System.nanoTime();
-        try {
-            worker.execute(() -> {
-                // Let in-flight Double Checks report first so their words are known before the final goes out.
-                for (CompletableFuture<Void> check : List.copyOf(pending)) {
-                    try {
-                        check.get(10, TimeUnit.SECONDS);
-                    } catch (Exception e) {
-                        break;
-                    }
+        // In-flight Double Checks must report before the final goes out so their words are known, but the final's
+        // own speech pass does not depend on them, so they are awaited only once it has a transcript.
+        java.util.function.Supplier<Set<String>> sent = () -> {
+            for (CompletableFuture<Void> check : List.copyOf(pending)) {
+                try {
+                    check.get(10, TimeUnit.SECONDS);
+                } catch (Exception e) {
+                    break;
                 }
-                process(request.conn(), null, whole, request.words(), request.partialMatch(),
-                    request.caseSensitive(), request.player(), request.sessionId(), request.language(),
-                    Set.copyOf(alreadySent), streamed ? 0 : MIN_AUDIO_SECONDS, queuedAt);
-            });
+            }
+            return Set.copyOf(alreadySent);
+        };
+        try {
+            worker.execute(() -> process(request.conn(), null, whole, request.words(), request.partialMatch(),
+                request.caseSensitive(), request.player(), request.sessionId(), request.language(),
+                sent, suspect.get(), streamed ? 0 : MIN_AUDIO_SECONDS, queuedAt));
         } catch (java.util.concurrent.RejectedExecutionException e) {
             System.err.println("Engine queue full, dropped clip for " + request.player());
         }
@@ -245,21 +253,35 @@ public final class EngineMain extends WebSocketServer {
 
     private void process(WebSocket conn, byte[] wav, WavDecoder.Pcm decoded, Moderator.Words words, boolean partial,
                          boolean caseSensitive, String player, String sessionId, String language,
-                         Set<String> alreadySent, double minSeconds, long queuedAt) {
+                         java.util.function.Supplier<Set<String>> alreadyConfirmed, boolean speculate,
+                         double minSeconds, long queuedAt) {
         long start = System.nanoTime();
         try {
             WavDecoder.Pcm pcm = decoded != null ? decoded : WavDecoder.decode(wav);
             // Models take 16 kHz; convert once here instead of letting sherpa build a resampler per stream.
             WavDecoder.Pcm model = Downsampler.toModelRate(pcm);
-            String transcript = pcm.seconds() < minSeconds ? "" : speech.transcribe(model);
-            long sttMs = (System.nanoTime() - start) / 1_000_000L;
             long[] confirmNs = {0};
+            boolean hasSpeech = pcm.seconds() >= minSeconds;
+            // When a live hit found nothing the confirm model will probably be needed, so run it alongside the
+            // primary pass. Clean speech never pays for this: without that signal the order stays sequential.
+            CompletableFuture<String> early = speculate && hasSpeech && speech.canConfirm()
+                ? CompletableFuture.supplyAsync(() -> {
+                    long t = System.nanoTime();
+                    String second = speech.confirmTranscript(model);
+                    confirmNs[0] = System.nanoTime() - t;
+                    return second;
+                }, confirmPool)
+                : null;
+            String transcript = hasSpeech ? speech.transcribe(model) : "";
+            long sttMs = (System.nanoTime() - start) / 1_000_000L;
+            Set<String> alreadySent = alreadyConfirmed.get();
             // Words every live partial_hit already confirmed need no second opinion here.
             List<String> found = WordMatcher.find(transcript, words.profanity(), partial, caseSensitive);
             found.addAll(WordMatcher.find(transcript, words.mute(), partial, caseSensitive));
             boolean allConfirmedLive = !found.isEmpty() && alreadySent.containsAll(found);
             JsonObject out = Moderator.result(transcript, words, partial, caseSensitive,
-                speech.canConfirm() && !allConfirmedLive ? ignored -> {
+                early != null && !allConfirmedLive ? ignored -> early.join()
+                : speech.canConfirm() && !allConfirmedLive ? ignored -> {
                     long t = System.nanoTime();
                     String second = speech.confirmTranscript(model);
                     confirmNs[0] = System.nanoTime() - t;
