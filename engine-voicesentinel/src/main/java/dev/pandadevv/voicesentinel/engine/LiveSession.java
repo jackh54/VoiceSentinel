@@ -48,6 +48,7 @@ final class LiveSession {
     private int utteranceLength;
     private int sampleRate = 48000;
     private SampleRing ring;
+    private Downsampler downsampler;
     private OnlineStream stream;
     private List<String> streamWords;
     private List<String> keywordWords = List.of();
@@ -153,12 +154,19 @@ final class LiveSession {
             ring = new SampleRing(LiveEngine.RING_SECONDS * sampleRate);
         }
         ring.append(samples);
+        if (downsampler == null) {
+            downsampler = Downsampler.forRate(sampleRate);
+        }
         clockMs += samples.length * 1000L / sampleRate;
         syncKeywords(request.words());
         if (stream == null) {
             return;
         }
-        stream.acceptWaveform(samples, sampleRate);
+        if (downsampler != null) {
+            stream.acceptWaveform(downsampler.process(samples), Downsampler.MODEL_RATE);
+        } else {
+            stream.acceptWaveform(samples, sampleRate);
+        }
         while (engine.isReady(stream)) {
             engine.decode(stream);
             String name = engine.hit(stream);
@@ -199,15 +207,16 @@ final class LiveSession {
         if (!cooldown.tryAcquire(word.toLowerCase(java.util.Locale.ROOT), clockMs)) {
             return;
         }
-        float[] window = ring.last(LiveEngine.WINDOW_SECONDS * sampleRate);
+        float[] window = ring.last((int) (engine.windowMs * (long) sampleRate / 1000));
         int rate = sampleRate;
         Set<String> sent = sentWords;
+        long queuedAt = System.nanoTime();
         CompletableFuture<Void> done = new CompletableFuture<>();
         pending.add(done);
         try {
             engine.doubleCheck.execute(() -> {
                 try {
-                    doubleCheck(request, new WavDecoder.Pcm(window, rate), sent);
+                    doubleCheck(request, new WavDecoder.Pcm(window, rate), sent, queuedAt);
                 } catch (Throwable e) {
                     System.err.println("Live double check error: " + e);
                 } finally {
@@ -220,28 +229,41 @@ final class LiveSession {
         }
     }
 
-    private void doubleCheck(Request request, WavDecoder.Pcm window, Set<String> sent) {
+    private void doubleCheck(Request request, WavDecoder.Pcm window, Set<String> sent, long queuedAt) {
         long start = System.nanoTime();
         SpeechEngine speech = engine.speech;
-        String transcript = speech.transcribe(window);
-        long sttMs = (System.nanoTime() - start) / 1_000_000L;
+        WavDecoder.Pcm model = Downsampler.toModelRate(window);
+        String transcript = speech.transcribe(model);
+        long primaryMs = (System.nanoTime() - start) / 1_000_000L;
+        long[] confirmNs = {0};
         JsonObject out = Moderator.result(transcript, request.words(), request.partialMatch(),
-            request.caseSensitive(), ignored -> speech.confirmTranscript(window),
-            request.player(), request.sessionId(), request.language());
-        if (!LiveDedupe.claim(out, sent)) {
+            request.caseSensitive(), ignored -> {
+                long t = System.nanoTime();
+                String second = speech.confirmTranscript(model);
+                confirmNs[0] = System.nanoTime() - t;
+                return second;
+            }, request.player(), request.sessionId(), request.language());
+        if (!out.get("flagged").getAsBoolean()) {
             return;
         }
+        String words = out.get("bad_words").toString();
+        String check = out.get("double_check").getAsString();
+        boolean send = LiveDedupe.claim(out, sent);
         long totalMs = (System.nanoTime() - start) / 1_000_000L;
+        System.out.println("live hit " + words.replace("[", "").replace("]", "") + ": wait "
+            + (start - queuedAt) / 1_000_000L + " ms, primary " + primaryMs + " ms, confirm "
+            + confirmNs[0] / 1_000_000L + " ms, total " + totalMs + " ms, " + check + (send ? "" : " (already sent)"));
+        if (!send) {
+            return;
+        }
         out.addProperty("type", "partial_hit");
         out.addProperty("source", "live");
         out.addProperty("utterance_id", request.utteranceId());
-        out.addProperty("stt_time_ms", sttMs);
-        out.addProperty("moderation_time_ms", totalMs - sttMs);
+        out.addProperty("stt_time_ms", primaryMs);
+        out.addProperty("moderation_time_ms", totalMs - primaryMs);
         out.addProperty("processing_time_ms", totalMs);
         out.addProperty("audio_data",
             Base64.getEncoder().encodeToString(WavEncoder.encode(window.samples(), window.sampleRate())));
-        System.out.println("partial_hit " + out.get("bad_words") + " took " + totalMs + "ms check="
-            + out.get("double_check").getAsString());
         if (request.conn().isOpen()) {
             request.conn().send(out.toString());
         }
@@ -259,6 +281,7 @@ final class LiveSession {
         }
         streamWords = null;
         ring = null;
+        downsampler = null;
         utterance = new float[0];
         utteranceLength = 0;
         streamed = false;

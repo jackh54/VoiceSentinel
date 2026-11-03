@@ -59,18 +59,37 @@ public final class EngineMain extends WebSocketServer {
         }
         System.setProperty("sherpa_onnx.native.path", opts.get("native"));
         LibraryUtils.load();
-        int threads = Integer.parseInt(opts.getOrDefault("threads", "2"));
+        int cores = Runtime.getRuntime().availableProcessors();
+        // More model threads than cores only makes concurrent decodes fight each other.
+        int threads = Math.max(1, Math.min(cores, Integer.parseInt(opts.getOrDefault("threads", "2"))));
+        int liveThreads = Math.max(1, Math.min(cores, Integer.parseInt(opts.getOrDefault("live-threads", "2"))));
+        int windowMs = Math.round(Float.parseFloat(opts.getOrDefault("live-window", "2.0")) * 1000);
+        System.out.println("Engine start: cpu \"" + cpuModel() + "\", " + cores + " cores, model threads " + threads
+            + ", live lanes " + liveThreads + ", live window " + windowMs + " ms");
         SpeechEngine speech = new SpeechEngine(Path.of(opts.get("models")), threads);
         LiveEngine live = LiveEngine.open(Path.of(opts.get("models")), speech,
             Float.parseFloat(opts.getOrDefault("kws-boost", "2.0")),
             Float.parseFloat(opts.getOrDefault("kws-threshold", "0.25")),
-            Integer.parseInt(opts.getOrDefault("live-threads", "2")));
+            liveThreads, windowMs);
         System.out.println("Live detection " + (live != null ? "enabled" : "disabled"));
         // The key arrives on stdin so it never shows in a process listing.
         String key = new String(System.in.readNBytes(64)).trim();
         EngineMain server = new EngineMain(Integer.parseInt(opts.get("port")), key, speech, live);
         watchParent(opts.get("parent"));
         server.start();
+    }
+
+    private static String cpuModel() {
+        try {
+            for (String line : java.nio.file.Files.readAllLines(Path.of("/proc/cpuinfo"))) {
+                if (line.startsWith("model name")) {
+                    return line.substring(line.indexOf(':') + 1).trim();
+                }
+            }
+        } catch (Exception ignored) {
+            // not Linux
+        }
+        return System.getProperty("os.name") + " " + System.getProperty("os.arch");
     }
 
     private static void watchParent(String pid) {
@@ -169,8 +188,10 @@ public final class EngineMain extends WebSocketServer {
         byte[] whole = buffer.size() == 0 ? audio : concat(buffer.toByteArray(), audio);
         // The multi-language model does not report what was spoken, so every list applies.
         Moderator.Words words = speech.canConfirm() ? wordsFor(state, language) : allWords(state);
+        long queuedAt = System.nanoTime();
         try {
-            worker.execute(() -> process(conn, whole, words, partial, caseSensitive, player, sessionId, language));
+            worker.execute(() -> process(conn, whole, null, words, partial, caseSensitive, player, sessionId, language,
+                Set.of(), MIN_AUDIO_SECONDS, queuedAt));
         } catch (java.util.concurrent.RejectedExecutionException e) {
             System.err.println("Engine queue full, dropped clip for " + player);
         }
@@ -202,6 +223,7 @@ public final class EngineMain extends WebSocketServer {
 
     private void liveBackstop(LiveSession.Request request, WavDecoder.Pcm whole, Set<String> alreadySent,
                               boolean streamed, List<CompletableFuture<Void>> pending) {
+        long queuedAt = System.nanoTime();
         try {
             worker.execute(() -> {
                 // Let in-flight Double Checks report first so their words are known before the final goes out.
@@ -214,29 +236,35 @@ public final class EngineMain extends WebSocketServer {
                 }
                 process(request.conn(), null, whole, request.words(), request.partialMatch(),
                     request.caseSensitive(), request.player(), request.sessionId(), request.language(),
-                    Set.copyOf(alreadySent), streamed ? 0 : MIN_AUDIO_SECONDS);
+                    Set.copyOf(alreadySent), streamed ? 0 : MIN_AUDIO_SECONDS, queuedAt);
             });
         } catch (java.util.concurrent.RejectedExecutionException e) {
             System.err.println("Engine queue full, dropped clip for " + request.player());
         }
     }
 
-    private void process(WebSocket conn, byte[] wav, Moderator.Words words, boolean partial, boolean caseSensitive,
-                         String player, String sessionId, String language) {
-        process(conn, wav, null, words, partial, caseSensitive, player, sessionId, language, Set.of(),
-            MIN_AUDIO_SECONDS);
-    }
-
     private void process(WebSocket conn, byte[] wav, WavDecoder.Pcm decoded, Moderator.Words words, boolean partial,
                          boolean caseSensitive, String player, String sessionId, String language,
-                         Set<String> alreadySent, double minSeconds) {
+                         Set<String> alreadySent, double minSeconds, long queuedAt) {
         long start = System.nanoTime();
         try {
             WavDecoder.Pcm pcm = decoded != null ? decoded : WavDecoder.decode(wav);
-            String transcript = pcm.seconds() < minSeconds ? "" : speech.transcribe(pcm);
+            // Models take 16 kHz; convert once here instead of letting sherpa build a resampler per stream.
+            WavDecoder.Pcm model = Downsampler.toModelRate(pcm);
+            String transcript = pcm.seconds() < minSeconds ? "" : speech.transcribe(model);
             long sttMs = (System.nanoTime() - start) / 1_000_000L;
+            long[] confirmNs = {0};
+            // Words every live partial_hit already confirmed need no second opinion here.
+            List<String> found = WordMatcher.find(transcript, words.profanity(), partial, caseSensitive);
+            found.addAll(WordMatcher.find(transcript, words.mute(), partial, caseSensitive));
+            boolean allConfirmedLive = !found.isEmpty() && alreadySent.containsAll(found);
             JsonObject out = Moderator.result(transcript, words, partial, caseSensitive,
-                speech.canConfirm() ? ignored -> speech.confirmTranscript(pcm) : null,
+                speech.canConfirm() && !allConfirmedLive ? ignored -> {
+                    long t = System.nanoTime();
+                    String second = speech.confirmTranscript(model);
+                    confirmNs[0] = System.nanoTime() - t;
+                    return second;
+                } : null,
                 player, sessionId, language);
             LiveDedupe.strip(out, alreadySent);
             long totalMs = (System.nanoTime() - start) / 1_000_000L;
@@ -247,7 +275,10 @@ public final class EngineMain extends WebSocketServer {
                 byte[] audio = wav != null ? wav : WavEncoder.encode(pcm.samples(), pcm.sampleRate());
                 out.addProperty("audio_data", Base64.getEncoder().encodeToString(audio));
             }
-            System.out.println("clip " + Math.round(pcm.seconds() * 1000) + "ms took " + totalMs + "ms check="
+            System.out.println("clip " + Math.round(pcm.seconds() * 1000) + "ms final "
+                + (out.getAsJsonArray("bad_words").isEmpty() ? "-" : out.get("bad_words").toString().replace("[", "").replace("]", "")) + ": wait "
+                + (start - queuedAt) / 1_000_000L + " ms, primary " + sttMs + " ms, confirm "
+                + confirmNs[0] / 1_000_000L + " ms, total " + totalMs + " ms, "
                 + out.get("double_check").getAsString());
             if (conn.isOpen()) {
                 conn.send(out.toString());

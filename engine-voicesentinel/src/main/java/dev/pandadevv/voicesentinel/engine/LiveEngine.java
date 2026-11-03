@@ -21,21 +21,23 @@ import java.util.concurrent.TimeUnit;
  * order, and a separate pool for Double Check so a slow confirm never delays the live stream.
  */
 final class LiveEngine implements AutoCloseable {
-    static final int WINDOW_SECONDS = 3;
     static final int RING_SECONDS = 4;
     static final long COOLDOWN_MS = 2000;
     static final long MAX_BACKLOG_MS = 1000;
     static final int MAX_QUEUED_CHUNKS = 100;
 
     final SpeechEngine speech;
+    final int windowMs;
     final ThreadPoolExecutor lanes;
     final ThreadPoolExecutor doubleCheck = new ThreadPoolExecutor(
         1, 1, 0L, TimeUnit.MILLISECONDS, new java.util.concurrent.ArrayBlockingQueue<>(16));
     private final KeywordSpotter spotter;
     private final KwsTokenizer tokenizer;
 
-    private LiveEngine(SpeechEngine speech, KeywordSpotter spotter, KwsTokenizer tokenizer, int laneThreads) {
+    private LiveEngine(SpeechEngine speech, KeywordSpotter spotter, KwsTokenizer tokenizer, int laneThreads,
+                       int windowMs) {
         this.speech = speech;
+        this.windowMs = windowMs;
         this.spotter = spotter;
         this.tokenizer = tokenizer;
         // Each session has at most one drain task queued, so this queue is bounded by the session count.
@@ -44,7 +46,8 @@ final class LiveEngine implements AutoCloseable {
     }
 
     /** Live is only available when a kws folder sits next to the speech models and Double Check exists. */
-    static LiveEngine open(Path models, SpeechEngine speech, float boost, float threshold, int laneThreads) {
+    static LiveEngine open(Path models, SpeechEngine speech, float boost, float threshold, int laneThreads,
+                          int windowMs) {
         Path dir = models.resolve("kws");
         if (!Files.isDirectory(dir) || !speech.canConfirm()) {
             return null;
@@ -69,7 +72,7 @@ final class LiveEngine implements AutoCloseable {
                 .setKeywordsFile(placeholder.toString())
                 .setKeywordsScore(boost).setKeywordsThreshold(threshold)
                 .setNumTrailingBlanks(1).build();
-            return new LiveEngine(speech, new KeywordSpotter(config), tokenizer, laneThreads);
+            return new LiveEngine(speech, new KeywordSpotter(config), tokenizer, laneThreads, windowMs);
         } catch (IOException | RuntimeException | UnsatisfiedLinkError e) {
             System.err.println("Live detection unavailable: " + e);
             return null;
