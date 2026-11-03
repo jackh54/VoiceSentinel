@@ -18,7 +18,7 @@ for platform in linux-x64 linux-aarch64 osx-arm64 osx-x86_64 win-x64; do
   (cd "$dir" && zip -qr "$OUT/engine-$platform.zip" .)
 done
 fetch_model() {
-  curl -fsSL "$BASE/asr-models/$1.tar.bz2" | tar xj -C "$WORK"
+  curl -fsSL "$BASE/${3:-asr-models}/$1.tar.bz2" | tar xj -C "$WORK"
   mkdir -p "$(dirname "$2")"
   mv "$WORK/$1" "$2"
   rm -rf "$2/test_wavs" "$2/.git"
@@ -26,6 +26,15 @@ fetch_model() {
 EN="$WORK/model-en"
 fetch_model sherpa-onnx-nemo-parakeet_tdt_transducer_110m-en-36000-int8 "$EN/primary"
 fetch_model sherpa-onnx-moonshine-base-en-int8 "$EN/confirm"
+# Keyword spotter for live detection: the engine looks for <models>/kws and only advertises "live" when it exists.
+fetch_model sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01 "$EN/kws-full" kws-models
+mkdir -p "$EN/kws"
+K="$EN/kws-full"
+cp "$K/encoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx" "$EN/kws/encoder.int8.onnx"
+cp "$K/decoder-epoch-12-avg-2-chunk-16-left-64.onnx" "$EN/kws/decoder.onnx"
+cp "$K/joiner-epoch-12-avg-2-chunk-16-left-64.int8.onnx" "$EN/kws/joiner.int8.onnx"
+cp "$K/tokens.txt" "$K/bpe.model" "$EN/kws/"
+rm -rf "$K"
 cp "$ROOT/THIRD_PARTY.md" "$EN/"
 (cd "$EN" && zip -qr "$OUT/model-en.zip" .)
 MULTI="$WORK/model-multi"

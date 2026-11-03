@@ -62,6 +62,9 @@ final class SpeechEngine implements AutoCloseable {
         return run(confirm, pcm);
     }
 
+    // Decoding separate streams of one recognizer from several threads is supported by sherpa-onnx (its own
+    // offline websocket server does it: "DecodeStreams is thread-safe"), so there is no lock; keep each stream
+    // on one thread.
     private static String run(OfflineRecognizer recognizer, WavDecoder.Pcm pcm) {
         OfflineStream stream = recognizer.createStream();
         try {
