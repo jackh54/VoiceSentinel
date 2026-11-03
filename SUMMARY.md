@@ -8,13 +8,20 @@
 
 * [Installation](voicesentinel-plugin/installation.md)
 * [Getting your license key](voicesentinel-plugin/getting-your-license-key.md)
+* [On-Server Mode](voicesentinel-plugin/on-server-mode.md)
 * [Configuration](voicesentinel-plugin/configuration.md)
+* [Moderation & escalation](voicesentinel-plugin/moderation-and-escalation.md)
+* [Consent](voicesentinel-plugin/consent.md)
+* [Storage](voicesentinel-plugin/storage.md)
+* [VoiceSentinel Cloud](voicesentinel-plugin/voicesentinel-cloud.md)
 * [Web dashboard](voicesentinel-plugin/web-dashboard.md)
 * [Voice reports & transcript buffer](voicesentinel-plugin/voice-reports.md)
 * [Commands and permissions](voicesentinel-plugin/commands-and-permissions.md)
 * [Word lists](voicesentinel-plugin/word-lists.md)
 * [Custom commands](voicesentinel-plugin/custom-commands.md)
 * [Discord webhooks](voicesentinel-plugin/discord-webhooks.md)
+* [Updating](voicesentinel-plugin/updating.md)
+* [Try it](voicesentinel-plugin/try-it.md)
 * [Troubleshooting (plugin)](voicesentinel-plugin/troubleshooting.md)
 
 ## VoiceSentinel – Processor

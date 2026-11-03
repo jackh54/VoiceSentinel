@@ -34,6 +34,9 @@ Top-level keys for **hosted pool** deployments (most self-hosted servers leave *
 | **compute_type** | `"int8"` | e.g. `int8` on CPU. |
 | **timeout_seconds** | `30` | Max time per job before drop. |
 | **cpu_threads** | `2` | Worker threads. |
+| **beam_size** | `5` | Decoding beam width. Use **`1`** for lower latency (slightly less accurate). |
+| **vad_filter** | `true` | Whisper internal VAD filter. |
+| **use_memory_input** | `false` | Transcribe from in-memory WAV (skips temp files when **`true`**). |
 | **huggingface_token** | `""` | Optional **`hf_…`** token for faster / higher-limit model downloads. |
 
 ## Audio
@@ -50,6 +53,24 @@ Top-level keys for **hosted pool** deployments (most self-hosted servers leave *
 | Key | Default | Description |
 |-----|---------|-------------|
 | **queue_max_size** | `500` | Waiting jobs; when full, new work is dropped. Monitor **`processing_queue_size`** via **GET /stats**. |
+| **worker_count** | `4` | Parallel queue workers. Lower it on small CPU-only hosts, raise it on busy multi-core hosts. |
+| **stt_concurrency** | `4` | Most transcriptions running at the same time. Defaults to **worker_count**. |
+
+## Performance and latency
+
+Typical tuning for busier servers:
+
+```json
+"transcription": {
+  "beam_size": 1,
+  "use_memory_input": true
+},
+"processing": {
+  "worker_count": 2
+}
+```
+
+Pair with plugin **`audio_capture`** settings ([Configuration](../voicesentinel-plugin/configuration.md#performance-and-latency)). Flagged responses can include **`processing_time_ms`**, **`stt_time_ms`**, and **`moderation_time_ms`**.
 
 ## Recordings
 

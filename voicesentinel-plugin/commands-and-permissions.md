@@ -6,15 +6,24 @@ Main command: **/voicesentinel** (aliases: **/vs**, **/voicesent**).
 
 | Command | What it does |
 |--------|----------------|
-| **/voicesentinel reload** | Reloads config and messages from disk. Use after editing config.yml or messages.yml. |
+| **/voicesentinel reload** | Reloads config and messages from disk. Use after editing config.yml or messages.yml. Also applies changes to consent, Cloud and the On-Server engine. Storage changes need a restart. |
 | **/voicesentinel stats** | Shows WebSocket connection status and basic processing stats. |
 | **/voicesentinel vcmute &lt;player&gt; &lt;duration&gt;** | Voice-mutes a player. Duration examples: `30m`, `2h`, `1d`. |
 | **/voicesentinel unvcmute &lt;player&gt;** | Removes their voice mute. |
 | **/voicesentinel discordtest all** | Sends a test payload to all Discord webhooks. Use `flag` or `mute` to test only one type. |
 | **/voicesentinel updatecheck** | Checks whether a newer plugin build is available (admin). |
+| **/voicesentinel test** | Shows the speech mode (On-Server, Public pool or Custom processor), whether the speech link is connected, and the consent mode (admin). |
+| **/voicesentinel debug &lt;player&gt;** | Shows why an online player is or is not moderated: consent, bypass permission, voice mute (admin). |
+| **/voicesentinel cloud** | Shows [VoiceSentinel Cloud](voicesentinel-cloud.md) status: enabled, entitled, last contact, queued incidents, last error (admin). |
 | **/voicesentinel webuser list** | Console/RCON: list web dashboard accounts. |
 | **/voicesentinel webuser delete &lt;username&gt;** | Console/RCON: remove a web account and its sessions. |
 | **/voicesentinel webuser …** | Other subcommands: **`create`**, **`setpassword`**, **`setrole`**, **`setuplink`** (console/RCON only). See [Web dashboard](web-dashboard.md). |
+
+### Player command
+
+| Command | What it does |
+|--------|----------------|
+| **/voiceconsent** (alias **/vconsent**) | Opens the consent menu so a player can review or change their answer. In NOTICE mode it shows the join notice message. No permission needed. See [Consent](consent.md). |
 
 ### Voice reports
 
@@ -26,7 +35,7 @@ Main command: **/voicesentinel** (aliases: **/vs**, **/voicesent**).
 
 See [Voice reports & transcript buffer](voice-reports.md) for buffer settings and processor evidence.
 
-Reload and stats need **voicesentinel.reload** / **voicesentinel.stats**. Vcmute/unvcmute need **voicesentinel.vcmute**. Discordtest, updatecheck, **webuser**, and the main command need **voicesentinel.admin** (or the right sub-permission).
+Reload and stats need **voicesentinel.reload** / **voicesentinel.stats**. Vcmute/unvcmute need **voicesentinel.vcmute**. Discordtest, updatecheck, test, debug, cloud, **webuser**, and the main command need **voicesentinel.admin** (or the right sub-permission).
 
 ## Permissions
 
