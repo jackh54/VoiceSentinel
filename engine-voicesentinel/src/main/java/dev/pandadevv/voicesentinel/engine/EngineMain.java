@@ -18,6 +18,8 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -29,6 +31,7 @@ public final class EngineMain extends WebSocketServer {
 
     private final String key;
     private final SpeechEngine speech;
+    private final LiveEngine live;
     private final ThreadPoolExecutor worker = new ThreadPoolExecutor(
         1, 1, 0L, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(64));
     private final Map<WebSocket, ClientState> clients = new ConcurrentHashMap<>();
@@ -38,12 +41,14 @@ public final class EngineMain extends WebSocketServer {
         volatile List<String> profanity = List.of();
         volatile Map<String, Moderator.Words> languages = Map.of();
         final Map<String, ByteArrayOutputStream> buffers = new ConcurrentHashMap<>();
+        final Map<String, LiveSession> sessions = new ConcurrentHashMap<>();
     }
 
-    private EngineMain(int port, String key, SpeechEngine speech) {
+    private EngineMain(int port, String key, SpeechEngine speech, LiveEngine live) {
         super(new InetSocketAddress("127.0.0.1", port));
         this.key = key;
         this.speech = speech;
+        this.live = live;
         setReuseAddr(true);
     }
 
@@ -56,9 +61,14 @@ public final class EngineMain extends WebSocketServer {
         LibraryUtils.load();
         int threads = Integer.parseInt(opts.getOrDefault("threads", "2"));
         SpeechEngine speech = new SpeechEngine(Path.of(opts.get("models")), threads);
+        LiveEngine live = LiveEngine.open(Path.of(opts.get("models")), speech,
+            Float.parseFloat(opts.getOrDefault("kws-boost", "2.0")),
+            Float.parseFloat(opts.getOrDefault("kws-threshold", "0.25")),
+            Integer.parseInt(opts.getOrDefault("live-threads", "2")));
+        System.out.println("Live detection " + (live != null ? "enabled" : "disabled"));
         // The key arrives on stdin so it never shows in a process listing.
         String key = new String(System.in.readNBytes(64)).trim();
-        EngineMain server = new EngineMain(Integer.parseInt(opts.get("port")), key, speech);
+        EngineMain server = new EngineMain(Integer.parseInt(opts.get("port")), key, speech, live);
         watchParent(opts.get("parent"));
         server.start();
     }
@@ -78,7 +88,10 @@ public final class EngineMain extends WebSocketServer {
 
     @Override
     public void onClose(WebSocket conn, int code, String reason, boolean remote) {
-        clients.remove(conn);
+        ClientState state = clients.remove(conn);
+        if (state != null) {
+            state.sessions.values().forEach(LiveSession::close);
+        }
     }
 
     @Override
@@ -105,7 +118,7 @@ public final class EngineMain extends WebSocketServer {
             if ("auth".equals(type)) {
                 state.authenticated = key.equals(string(data, "server_key", ""));
                 conn.send(state.authenticated
-                    ? "{\"type\":\"auth_success\"}"
+                    ? "{\"type\":\"auth_success\",\"capabilities\":" + (live != null ? "[\"live\"]" : "[]") + "}"
                     : "{\"type\":\"auth_failed\",\"reason\":\"Invalid server key\"}");
             } else if ("ping".equals(type)) {
                 JsonObject pong = new JsonObject();
@@ -132,6 +145,20 @@ public final class EngineMain extends WebSocketServer {
         String language = string(data, "detected_language", "en");
         boolean partial = !data.has("partial_match") || data.get("partial_match").getAsBoolean();
         boolean caseSensitive = data.has("case_sensitive") && data.get("case_sensitive").getAsBoolean();
+        String utteranceId = string(data, "utterance_id", null);
+        if (live != null && utteranceId != null) {
+            // Live utterances are decoded and spotted off the WebSocket thread, in order per session.
+            LiveSession session = state.sessions.computeIfAbsent(sessionId, id -> new LiveSession(live));
+            LiveSession.Request request = new LiveSession.Request(conn, player, sessionId, language, utteranceId,
+                wordsFor(state, language), partial, caseSensitive);
+            String audioBase64 = string(data, "audio_data", "");
+            if (data.has("is_final") && data.get("is_final").getAsBoolean()) {
+                session.finish(request, audioBase64, this::liveBackstop);
+            } else {
+                session.chunk(request, audioBase64);
+            }
+            return;
+        }
         byte[] audio = Base64.getDecoder().decode(string(data, "audio_data", ""));
         ByteArrayOutputStream buffer = state.buffers.computeIfAbsent(sessionId, id -> new ByteArrayOutputStream());
         if (!data.has("is_final") || !data.get("is_final").getAsBoolean()) {
@@ -173,22 +200,52 @@ public final class EngineMain extends WebSocketServer {
         return new Moderator.Words(profanity, mute);
     }
 
+    private void liveBackstop(LiveSession.Request request, WavDecoder.Pcm whole, Set<String> alreadySent,
+                              boolean streamed, List<CompletableFuture<Void>> pending) {
+        try {
+            worker.execute(() -> {
+                // Let in-flight Double Checks report first so their words are known before the final goes out.
+                for (CompletableFuture<Void> check : List.copyOf(pending)) {
+                    try {
+                        check.get(10, TimeUnit.SECONDS);
+                    } catch (Exception e) {
+                        break;
+                    }
+                }
+                process(request.conn(), null, whole, request.words(), request.partialMatch(),
+                    request.caseSensitive(), request.player(), request.sessionId(), request.language(),
+                    Set.copyOf(alreadySent), streamed ? 0 : MIN_AUDIO_SECONDS);
+            });
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            System.err.println("Engine queue full, dropped clip for " + request.player());
+        }
+    }
+
     private void process(WebSocket conn, byte[] wav, Moderator.Words words, boolean partial, boolean caseSensitive,
                          String player, String sessionId, String language) {
+        process(conn, wav, null, words, partial, caseSensitive, player, sessionId, language, Set.of(),
+            MIN_AUDIO_SECONDS);
+    }
+
+    private void process(WebSocket conn, byte[] wav, WavDecoder.Pcm decoded, Moderator.Words words, boolean partial,
+                         boolean caseSensitive, String player, String sessionId, String language,
+                         Set<String> alreadySent, double minSeconds) {
         long start = System.nanoTime();
         try {
-            WavDecoder.Pcm pcm = WavDecoder.decode(wav);
-            String transcript = pcm.seconds() < MIN_AUDIO_SECONDS ? "" : speech.transcribe(pcm);
+            WavDecoder.Pcm pcm = decoded != null ? decoded : WavDecoder.decode(wav);
+            String transcript = pcm.seconds() < minSeconds ? "" : speech.transcribe(pcm);
             long sttMs = (System.nanoTime() - start) / 1_000_000L;
             JsonObject out = Moderator.result(transcript, words, partial, caseSensitive,
                 speech.canConfirm() ? ignored -> speech.confirmTranscript(pcm) : null,
                 player, sessionId, language);
+            LiveDedupe.strip(out, alreadySent);
             long totalMs = (System.nanoTime() - start) / 1_000_000L;
             out.addProperty("stt_time_ms", sttMs);
             out.addProperty("moderation_time_ms", totalMs - sttMs);
             out.addProperty("processing_time_ms", totalMs);
             if (out.get("flagged").getAsBoolean()) {
-                out.addProperty("audio_data", Base64.getEncoder().encodeToString(wav));
+                byte[] audio = wav != null ? wav : WavEncoder.encode(pcm.samples(), pcm.sampleRate());
+                out.addProperty("audio_data", Base64.getEncoder().encodeToString(audio));
             }
             System.out.println("clip " + Math.round(pcm.seconds() * 1000) + "ms took " + totalMs + "ms check="
                 + out.get("double_check").getAsString());
