@@ -224,6 +224,11 @@ See LICENSE file for details.
 
 ## Changelog
 
+### Plugin 3.8.1 / Engine 1.1.1
+- Faster live checks, mostly on older CPUs: a live hit is confirmed by one model instead of two
+- End-of-sentence checks no longer wait behind other players' checks
+- Default mute broadcast now reads "{player} was voice muted." (only changed if you never edited it)
+
 ### Plugin 3.8.0 / Engine 1.1.0
 - Live detection in On-Server Mode: a listed word is caught while the player is still talking, about 0.7 s after the word on a modern CPU
 - Every live hit is confirmed by Double Check; the end-of-sentence check stays as a backstop
