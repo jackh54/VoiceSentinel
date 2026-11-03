@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -29,7 +30,7 @@ final class LiveSession {
     /** Runs the whole-utterance backstop once the live part of the utterance is over. */
     interface Backstop {
         void run(Request request, WavDecoder.Pcm whole, Set<String> alreadySent, boolean streamed,
-                 List<CompletableFuture<Void>> pending);
+                 List<CompletableFuture<Void>> pending, AtomicBoolean suspect);
     }
 
     private final LiveEngine engine;
@@ -54,6 +55,8 @@ final class LiveSession {
     private List<String> keywordWords = List.of();
     private Set<String> sentWords = Collections.synchronizedSet(new HashSet<>());
     private List<CompletableFuture<Void>> pending = Collections.synchronizedList(new ArrayList<>());
+    // Set when a spotter hit found no listed word in its window, so the final likely still has work to do.
+    private AtomicBoolean suspect = new AtomicBoolean();
 
     LiveSession(LiveEngine engine) {
         this.engine = engine;
@@ -117,13 +120,14 @@ final class LiveSession {
             WavDecoder.Pcm whole = new WavDecoder.Pcm(java.util.Arrays.copyOf(utterance, utteranceLength), sampleRate);
             Set<String> sent = sentWords;
             List<CompletableFuture<Void>> waiting = pending;
+            AtomicBoolean wasSuspect = suspect;
             boolean wasStreamed = streamed;
             end();
             finished.add(request.utteranceId());
             if (finished.size() > 8) {
                 finished.remove(finished.iterator().next());
             }
-            backstop.run(request, whole, sent, wasStreamed, waiting);
+            backstop.run(request, whole, sent, wasStreamed, waiting, wasSuspect);
         });
     }
 
@@ -210,13 +214,14 @@ final class LiveSession {
         float[] window = ring.last((int) (engine.windowMs * (long) sampleRate / 1000));
         int rate = sampleRate;
         Set<String> sent = sentWords;
+        AtomicBoolean unsure = suspect;
         long queuedAt = System.nanoTime();
         CompletableFuture<Void> done = new CompletableFuture<>();
         pending.add(done);
         try {
             engine.doubleCheck.execute(() -> {
                 try {
-                    doubleCheck(request, new WavDecoder.Pcm(window, rate), sent, queuedAt);
+                    doubleCheck(request, new WavDecoder.Pcm(window, rate), sent, unsure, queuedAt);
                 } catch (Throwable e) {
                     System.err.println("Live double check error: " + e);
                 } finally {
@@ -229,39 +234,41 @@ final class LiveSession {
         }
     }
 
-    private void doubleCheck(Request request, WavDecoder.Pcm window, Set<String> sent, long queuedAt) {
+    /**
+     * The spotter already heard the word, so the only second opinion needed is the confirm model on the window
+     * that holds it. A window where it hears no listed word sends nothing (the final still covers it).
+     */
+    private void doubleCheck(Request request, WavDecoder.Pcm window, Set<String> sent, AtomicBoolean unsure,
+                             long queuedAt) {
         long start = System.nanoTime();
         SpeechEngine speech = engine.speech;
         WavDecoder.Pcm model = Downsampler.toModelRate(window);
-        String transcript = speech.transcribe(model);
-        long primaryMs = (System.nanoTime() - start) / 1_000_000L;
-        long[] confirmNs = {0};
+        String transcript = speech.confirmTranscript(model);
+        long confirmMs = (System.nanoTime() - start) / 1_000_000L;
         JsonObject out = Moderator.result(transcript, request.words(), request.partialMatch(),
-            request.caseSensitive(), ignored -> {
-                long t = System.nanoTime();
-                String second = speech.confirmTranscript(model);
-                confirmNs[0] = System.nanoTime() - t;
-                return second;
-            }, request.player(), request.sessionId(), request.language());
+            request.caseSensitive(), null, request.player(), request.sessionId(), request.language());
         if (!out.get("flagged").getAsBoolean()) {
+            unsure.set(true);
+            System.out.println("live hit -: wait " + (start - queuedAt) / 1_000_000L + " ms, primary 0 ms, confirm "
+                + confirmMs + " ms, total " + confirmMs + " ms, rejected (no listed word heard)");
             return;
         }
+        out.addProperty("double_check", "confirmed");
+        out.addProperty("confirmation", "confirmed");
         String words = out.get("bad_words").toString();
-        String check = out.get("double_check").getAsString();
         boolean send = LiveDedupe.claim(out, sent);
-        long totalMs = (System.nanoTime() - start) / 1_000_000L;
         System.out.println("live hit " + words.replace("[", "").replace("]", "") + ": wait "
-            + (start - queuedAt) / 1_000_000L + " ms, primary " + primaryMs + " ms, confirm "
-            + confirmNs[0] / 1_000_000L + " ms, total " + totalMs + " ms, " + check + (send ? "" : " (already sent)"));
+            + (start - queuedAt) / 1_000_000L + " ms, primary 0 ms, confirm " + confirmMs + " ms, total "
+            + confirmMs + " ms, confirmed" + (send ? "" : " (already sent)"));
         if (!send) {
             return;
         }
         out.addProperty("type", "partial_hit");
         out.addProperty("source", "live");
         out.addProperty("utterance_id", request.utteranceId());
-        out.addProperty("stt_time_ms", primaryMs);
-        out.addProperty("moderation_time_ms", totalMs - primaryMs);
-        out.addProperty("processing_time_ms", totalMs);
+        out.addProperty("stt_time_ms", confirmMs);
+        out.addProperty("moderation_time_ms", 0L);
+        out.addProperty("processing_time_ms", confirmMs);
         out.addProperty("audio_data",
             Base64.getEncoder().encodeToString(WavEncoder.encode(window.samples(), window.sampleRate())));
         if (request.conn().isOpen()) {
@@ -288,6 +295,7 @@ final class LiveSession {
         utteranceId = null;
         sentWords = Collections.synchronizedSet(new HashSet<>());
         pending = Collections.synchronizedList(new ArrayList<>());
+        suspect = new AtomicBoolean();
     }
 
     private void append(float[] samples) {
