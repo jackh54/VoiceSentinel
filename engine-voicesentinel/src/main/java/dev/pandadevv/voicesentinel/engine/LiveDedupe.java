@@ -12,6 +12,25 @@ final class LiveDedupe {
     private LiveDedupe() {
     }
 
+    /**
+     * Prepares a partial_hit result: drops words an earlier confirmed partial_hit already reported and records
+     * the rest as reported when this hit is confirmed. Rejected hits record nothing, so the final (or a later
+     * confirmed hit) can still report the word. Returns false when nothing is left to send. Checking and
+     * recording share one lock so two concurrent Double Checks cannot both confirm the same word.
+     */
+    static boolean claim(JsonObject result, Set<String> confirmedSent) {
+        synchronized (confirmedSent) {
+            strip(result, Set.copyOf(confirmedSent));
+            if (!result.get("flagged").getAsBoolean()) {
+                return false;
+            }
+            if (!"rejected".equals(result.get("confirmation").getAsString())) {
+                result.getAsJsonArray("bad_words").forEach(word -> confirmedSent.add(word.getAsString()));
+            }
+            return true;
+        }
+    }
+
     static void strip(JsonObject result, Set<String> alreadySent) {
         if (alreadySent.isEmpty()) {
             return;

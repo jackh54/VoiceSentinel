@@ -53,6 +53,26 @@ class LiveDedupeTest {
     }
 
     @Test
+    void rejectedHitIsNotRecordedSoTheFinalStillReportsTheWord() {
+        Set<String> sent = java.util.Collections.synchronizedSet(new java.util.HashSet<>());
+        assertTrue(LiveDedupe.claim(result("fuck", "nothing here"), sent));
+        assertTrue(sent.isEmpty());
+        JsonObject finalResult = result("fuck", "fuck");
+        LiveDedupe.strip(finalResult, sent);
+        assertTrue(finalResult.get("flagged").getAsBoolean());
+        assertEquals("confirmed", finalResult.get("confirmation").getAsString());
+    }
+
+    @Test
+    void laterConfirmedHitIsSentOnceAfterARejectedOne() {
+        Set<String> sent = java.util.Collections.synchronizedSet(new java.util.HashSet<>());
+        assertTrue(LiveDedupe.claim(result("fuck", "nothing here"), sent));
+        assertTrue(LiveDedupe.claim(result("fuck", "fuck"), sent));
+        assertEquals(Set.of("fuck"), sent);
+        assertFalse(LiveDedupe.claim(result("fuck", "fuck"), sent));
+    }
+
+    @Test
     void emptySentSetLeavesTheResultAlone() {
         JsonObject out = result("fuck", "fuck");
         String before = out.toString();

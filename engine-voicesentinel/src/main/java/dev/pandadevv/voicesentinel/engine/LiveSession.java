@@ -228,14 +228,8 @@ final class LiveSession {
         JsonObject out = Moderator.result(transcript, request.words(), request.partialMatch(),
             request.caseSensitive(), ignored -> speech.confirmTranscript(window),
             request.player(), request.sessionId(), request.language());
-        // Drop words an earlier partial_hit of this utterance already reported. Checking and recording happen
-        // under one lock so two concurrent Double Checks cannot both report the same word.
-        synchronized (sent) {
-            LiveDedupe.strip(out, new HashSet<>(sent));
-            if (!out.get("flagged").getAsBoolean()) {
-                return;
-            }
-            out.getAsJsonArray("bad_words").forEach(word -> sent.add(word.getAsString()));
+        if (!LiveDedupe.claim(out, sent)) {
+            return;
         }
         long totalMs = (System.nanoTime() - start) / 1_000_000L;
         out.addProperty("type", "partial_hit");
