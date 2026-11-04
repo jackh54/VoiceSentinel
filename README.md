@@ -224,6 +224,9 @@ See LICENSE file for details.
 
 ## Changelog
 
+### Plugin 3.8.2
+- Bug and performance fixes
+
 ### Plugin 3.8.1 / Engine 1.1.1
 - Faster live checks, mostly on older CPUs: a live hit is confirmed by one model instead of two
 - End-of-sentence checks no longer wait behind other players' checks
