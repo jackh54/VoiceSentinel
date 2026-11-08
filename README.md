@@ -6,12 +6,13 @@
 
 VoiceSentinel is a real-time voice moderation system for Minecraft servers using **Simple Voice Chat** or **PlasmoVoice**.
 
-This public repo holds the speech components. The Minecraft plugin is closed source and [sold on BuiltByBit](https://builtbybit.com/voicesentinel).
+This public repo holds the self-hostable speech processor. The Minecraft plugin and its On-Server speech engine are closed source and [sold on BuiltByBit](https://builtbybit.com/voicesentinel).
 
 | Folder | What it is |
 |---|---|
-| `engine-voicesentinel/` | On-Server speech engine the plugin downloads in LOCAL mode. No Docker or Python needed. |
 | `processor-voicesentinel/` | Python processor for the public pool and self-hosting. |
+
+The On-Server engine (`LOCAL` mode, no Docker or Python needed) is downloaded by the plugin automatically.
 
 Three ways to run it: **On-Server** (`LOCAL`), **Public Pool** (`PUBLIC`) or **Self-Hosted** (`CUSTOM`).
 
