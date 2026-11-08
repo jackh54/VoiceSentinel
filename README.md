@@ -224,6 +224,15 @@ See LICENSE file for details.
 
 ## Changelog
 
+### Plugin 3.8.3
+- Faster recovery when the connection to the speech processor drops: VoiceSentinel now notices a dead connection within seconds and reconnects on its own
+- Fixed `/vs reload` sometimes dropping the processor connection
+- Fixed auto-mute stopping for a player for the rest of their session when the mute ladder had no valid tiers
+- The `voicesentinel.reload`, `voicesentinel.stats` and `voicesentinel.vcmute` permissions now work on their own, as documented
+- `/vs` help now lists every subcommand
+- More accurate anonymous usage statistics (turn off with `telemetry.enabled: false`)
+- General performance and stability improvements
+
 ### Plugin 3.8.2
 - Bug and performance fixes
 
