@@ -225,6 +225,14 @@ See LICENSE file for details.
 
 ## Changelog
 
+### Plugin 3.9.0
+- On-Server Mode: the speech engine now downloads from BuiltByBit, so a fresh install sets itself up faster and more reliably
+- Engine setup never hangs: it gives up cleanly after two minutes and tells you what to do
+- Servers that share a plugin folder no longer download the engine twice at once
+- You can still place `engine-<platform>.zip` in `plugins/VoiceSentinel/engine/` by hand; VoiceSentinel checks it and installs it
+- Clearer console messages when the engine can't be set up
+- General performance and stability improvements
+
 ### Plugin 3.8.3
 - Faster recovery when the connection to the speech processor drops: VoiceSentinel now notices a dead connection within seconds and reconnects on its own
 - Fixed `/vs reload` sometimes dropping the processor connection
