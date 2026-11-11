@@ -225,6 +225,19 @@ See LICENSE file for details.
 
 ## Changelog
 
+### Plugin 3.10.0
+- Built-in voice mutes: VoiceSentinel now blocks muted players itself, so LuckPerms is no longer needed. New `mutes:` options set what a muted player can't use (proximity, whisper, groups, or all but named groups) and whether they can still hear others
+- Muted players see how long they have left and are told when they try to talk
+- New staff commands: `/vs pardon`, `/vs history` and `/vs mutes`. `/vs vcmute` takes an optional reason
+- `[XX-ALLOW]` section in the word list for words that should never be flagged
+- PlaceholderAPI placeholders: `%voicesentinel_muted%`, `%voicesentinel_mute_remaining%`, `%voicesentinel_mute_reason%`, `%voicesentinel_strikes%`, `%voicesentinel_consent%`
+- Optional data export database (`data_export:`, off by default): send transcripts, flagged clips, mutes, strikes, reports and staff actions to your own MySQL or MariaDB database for dashboards, ticket bots or appeal sites
+- VoiceSentinel stays loaded without a license key: activate it with `/vs license <key>`, no restart needed
+- `/vs test` now checks your whole setup
+- Folia: usage statistics and several scheduler fixes
+- Your config.yml and messages.yml are updated automatically, and your edits are kept
+- General performance and stability improvements
+
 ### Plugin 3.9.0
 - On-Server Mode: faster, more reliable speech engine setup on fresh installs
 - Engine setup never hangs: it gives up cleanly and tells you what to do
