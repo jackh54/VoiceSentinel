@@ -1,15 +1,15 @@
 # Troubleshooting (plugin)
 
 **Plugin won’t start**  
-- **license-key** missing or invalid.  
+- **license-key** missing or invalid. The plugin stays loaded but does not moderate. Run **`/voicesentinel license <key>`**.  
 - No voice mod: install **Simple Voice Chat** or **PlasmoVoice**. Having both also stops the plugin. Install one.  
 - **`voice_backend`** names a mod that is not installed. Set it to `AUTO` or install the mod.  
 - **Paper/Folia 1.21+** and **Java 21** required.  
 - **CUSTOM** mode: **server_key** empty or still the default placeholder. Set a real 16 to 256 character key matching the processor. (**PUBLIC** and **LOCAL** do not use it.)  
-- **LuckPerms** is not needed to start. Without it the console says `LuckPerms not found: built-in voice mute is off` and automatic mutes do not happen.
+- **LuckPerms** is not needed to start or to mute. It is only needed with `mutes.enforcement: LUCKPERMS`; if that is set and LuckPerms is missing, the console says `LuckPerms not found: built-in voice mute is off` and mutes do not happen. With `mutes.mirror_luckperms: true` and no LuckPerms, mutes still work but no deny node is added.
 
 **“Processor not connected” / no transcripts**  
-- Run **`/voicesentinel test`**. It shows the mode and whether the speech link is connected.  
+- Run **`/voicesentinel test`**. It shows the mode, whether the speech link is connected and any other setup problem in red.  
 - **PUBLIC / CUSTOM:** the processor (or pool) must be reachable from the Minecraft host. For a self-hosted processor try **`curl http://host:port/health`**.  
 - **CUSTOM:** **processor_websocket_url** must be correct (`ws://` or `wss://`). **server_key** in **`config.yml`** must match **`server.server_key`** in **`config.json`**. Check processor logs for auth failures.  
 - **PUBLIC:** **processor_connection_mode** must be **`PUBLIC`**. Ensure the plugin version is supported by the pool. Check **`processor_discovery_url`** if you overrode it.  
@@ -19,7 +19,9 @@
 ## On-Server Mode
 
 **Engine does not download** (`Speech engine install failed`)  
-- The server needs outbound HTTPS access to GitHub on the first start. Check firewall and proxy rules.  
+- The server needs outbound HTTPS access on the first start. Check firewall and proxy rules.  
+- The download gives up cleanly and the console says what to do. Pool mode keeps working.  
+- Fallback: place the engine zip for your platform (for example `engine-linux-x64.zip`) in **`plugins/VoiceSentinel/engine/`** and restart. The plugin checks it and installs it. If the console says it does not match this version, delete it and get the file that matches your plugin version.  
 - Check free disk space. The engine and models are stored in **`plugins/VoiceSentinel/engine/`**.  
 - A file that fails its checksum is not used. Restart to try again.  
 - Restart the server after fixing the cause.
@@ -71,7 +73,7 @@
 - Check the steps in **`moderation.escalation`**. A first mild strike is only a `report` by default.  
 - Strikes only count after **`flag_threshold`** is reached.  
 - Strikes older than **`escalation.window_minutes`** do not count.  
-- A `warn` needs the player to be online. A `mute` needs LuckPerms.
+- A `warn` needs the player to be online. A `mute` needs LuckPerms only with `mutes.enforcement: LUCKPERMS`.
 
 **Storage database unreachable**  
 - The console says `Could not reach the storage database`. Strikes are counted in memory and ladder mutes use the default length until it reconnects. Check **`storage`** host, port, database, username and password. See [Storage](storage.md).  
@@ -80,18 +82,26 @@
 **VoiceSentinel Cloud**  
 - Run **`/voicesentinel cloud`**. `Entitled: no` means the license does not include Cloud. See [VoiceSentinel Cloud](voicesentinel-cloud.md#who-gets-it).  
 - Set **`cloud.enabled: true`** and run **`/voicesentinel reload`**.  
-- Remote unmute needs LuckPerms.
+- Remote unmute and extend work with either enforcement mode. With `LUCKPERMS`, LuckPerms must be installed.
 
 **Alerts or Discord**  
 - Alerts: **alert_staff** and **`voicesentinel.alerts`**.  
 - Discord: **discord.enabled** and URLs set. Test **`/voicesentinel discordtest all`**.  
 - Optional **include_audio** on flagged/mute embeds requires **`response.include_audio: true`** on the **processor** and **`include_audio: true`** in the plugin Discord blocks.
 
+**A muted player can still talk, or cannot hear**  
+- With Simple Voice Chat, check `mutes.block` (proximity, whisper, groups, `allowed_groups`) and `mutes.listen`. PlasmoVoice blocks all voice.  
+- With `mutes.mirror_luckperms: true`, Simple Voice Chat blocks all voice and ignores `mutes.block`.  
+- Run **`/voicesentinel mutes`** or **`history <player>`** to see the active mute.  
+
+**`/voicesentinel vcmute` says player not found**  
+- Offline players work if the server has seen them before. Use their name, the name with or without the Bedrock `.` prefix, or their UUID.  
+
 **Mute ladder**  
-- Requires **LuckPerms**. Enable **`mute_ladder.enabled`**. Durations use the same syntax as **`/voicesentinel vcmute`** (for example `30m`, `1h`).
+- Enable **`mute_ladder.enabled`**. LuckPerms is not needed. Durations use the same syntax as **`/voicesentinel vcmute`** (for example `30m`, `1h`).
 
 **Custom commands (`mute_commands` / `profanity_commands`) never run**  
-- **`mute_commands`:** only after a **successful auto-mute**. Check **LuckPerms** if the built-in LuckPerms mute is on and LuckPerms is missing.  
+- **`mute_commands`:** only after a **successful auto-mute**. Check LuckPerms if `mutes.enforcement` is `LUCKPERMS` and LuckPerms is missing.  
 - **`profanity_commands`:** only when the hit does not mute (step `report` or `warn`), with **`flag_threshold`** met, and words with no keyword mapping (see [Custom commands](custom-commands.md)).  
 - Unconfirmed hits never run commands.  
 - **CommandWhitelist** (or similar): allow the command root for **console**.  

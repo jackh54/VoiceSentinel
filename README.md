@@ -18,7 +18,7 @@ Start here:
 
 * **Plugin (Paper / Folia):** [Installation](voicesentinel-plugin/installation.md)
 * **No Docker:** [On-Server Mode](voicesentinel-plugin/on-server-mode.md)
-* **Updating to 3.8.0:** [Updating](voicesentinel-plugin/updating.md)
+* **Updating to 3.10.1:** [Updating](voicesentinel-plugin/updating.md)
 * **Hear it work:** [Try it](voicesentinel-plugin/try-it.md)
 * **Processor (Docker / bare metal):** [Installation](voicesentinel-processor/installation.md)
 * **Legal:** [**https://www.pandascript.dev/voicesentinel**](https://www.pandascript.dev/voicesentinel)

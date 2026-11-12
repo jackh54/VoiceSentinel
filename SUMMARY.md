@@ -20,8 +20,11 @@
 * [Word lists](voicesentinel-plugin/word-lists.md)
 * [Custom commands](voicesentinel-plugin/custom-commands.md)
 * [Discord webhooks](voicesentinel-plugin/discord-webhooks.md)
+* [Placeholders](voicesentinel-plugin/placeholders.md)
+* [Data export](voicesentinel-plugin/data-export.md)
 * [Updating](voicesentinel-plugin/updating.md)
 * [Try it](voicesentinel-plugin/try-it.md)
+* [Developer API](voicesentinel-plugin/developer-api.md)
 * [Troubleshooting (plugin)](voicesentinel-plugin/troubleshooting.md)
 
 ## VoiceSentinel – Processor

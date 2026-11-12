@@ -9,3 +9,5 @@ license-key: "your-actual-key-here"
 ```
 
 Save the file, and continue configuring.
+
+You can also start the server without a key. VoiceSentinel stays loaded but does not moderate. Run **`/voicesentinel license <your-key>`** from the console or as an admin. The key is checked, saved to `config.yml` and moderation starts with no restart. To change a key that is already active, edit `config.yml` and restart.

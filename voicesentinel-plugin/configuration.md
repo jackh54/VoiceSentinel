@@ -9,13 +9,13 @@ description: >-
 
 Everything here lives in **`plugins/VoiceSentinel/config.yml`**. Restart the server or run **`/voicesentinel reload`** after changes (unless noted). Word lists and messages are in **`plugins/VoiceSentinel/config/`**.
 
-Values shown as defaults are the ones in the `config.yml` that ships with 3.8.0. An upgraded config keeps its own values. See [Updating](updating.md).
+Values shown as defaults are the ones in the `config.yml` that ships with 3.10.1. An upgraded config keeps its own values. See [Updating](updating.md).
 
 ## License and processor connection
 
 | Option | What it does |
 | ------ | ------------ |
-| **license-key** | Your license key. Required. The plugin will not start without it. |
+| **license-key** | Your license key. Required. Without a valid key the plugin stays loaded but does not moderate. Run **`/voicesentinel license <key>`** to activate it with no restart (the key is saved to `config.yml`). |
 | **processor\_connection\_mode** | **`PUBLIC`** (default) = shared processor pool, audio is sent to the pool. **`LOCAL`** = [On-Server Mode](on-server-mode.md), no Docker, audio stays on this machine. **`CUSTOM`** = your own processor at **`processor_websocket_url`**. |
 | **processor\_websocket\_url** | WebSocket URL of **your** processor in CUSTOM mode, for example `ws://192.168.1.5:28472` or `wss://processor.example.com`. Not used in LOCAL or PUBLIC mode. |
 | **processor\_discovery\_url** | Optional. Where the plugin fetches the PUBLIC pool directory. Not in the default file. Override only if directed. |
@@ -59,7 +59,7 @@ local_engine:
 | **alert\_staff** | `true` | Players with **`voicesentinel.alerts`** get in-game alerts when content is flagged. |
 | **flag\_threshold** | `1` | Flags in a session before alerts, strikes and actions start. `1` = the first hit counts. An [unconfirmed](moderation-and-escalation.md#unconfirmed-hits) hit does not count. |
 | **mute-duration-minutes** | `60` | Auto-mute length when the mute ladder is off. |
-| **disable-listening-on-mute** | `false` | `true` = muted players cannot hear others either. `false` = they only cannot speak. |
+| **disable-listening-on-mute** | `false` | Deprecated. Use **`mutes.listen`**. Upgrades copy its value into **`mutes.listen`**. |
 | **health\_check\_interval** | `10000` | How often the plugin checks processor health, in milliseconds (minimum 5000). |
 
 ## Consent and privacy notice
@@ -104,9 +104,45 @@ moderation:
 | **appeal\_url** | `""` | Makes **appeal\_message** a clickable link. |
 | **network\_strikes** | `true` | With MySQL/MariaDB [storage](storage.md), count strikes across every server on the database. |
 
-## Mute ladder (LuckPerms)
+## Voice mutes (`mutes`)
 
-Escalating durations for **repeat** auto-mutes. Requires **LuckPerms**.
+Who blocks a muted player's voice, and what a muted player can still do. Since 3.10 VoiceSentinel blocks muted players itself, so **LuckPerms is optional**.
+
+```yaml
+mutes:
+  enforcement: NATIVE
+  mirror_luckperms: false
+  block:
+    proximity: true
+    whisper: true
+    groups: ALL
+    allowed_groups: []
+  listen: false
+  indicator: ACTION_BAR
+  notify_on_attempt: true
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| **enforcement** | `NATIVE` | `NATIVE` = VoiceSentinel blocks the voice itself. Needs no LuckPerms. `LUCKPERMS` = VoiceSentinel adds a `voicechat.speak` deny node and the voice mod enforces it. Needs LuckPerms. |
+| **mirror\_luckperms** | `false` | With `NATIVE`, also add the LuckPerms deny node so other plugins can see the mute. Needs LuckPerms. Simple Voice Chat then blocks all of that player's voice and the **`block`** options are ignored. |
+| **block.proximity** | `true` | Block normal proximity voice. |
+| **block.whisper** | `true` | Block whispering. |
+| **block.groups** | `ALL` | `ALL` = no group voice. `NONE` = groups still work. `OPEN_ONLY` = block open groups, allow private and isolated ones. |
+| **block.allowed\_groups** | `[]` | Group names a muted player may still talk in, for example `["staff-appeal"]`. Checked before **`groups`**. |
+| **listen** | `false` | `true` = muted players also stop hearing others. |
+| **indicator** | `ACTION_BAR` | How a muted player sees they are muted and how long is left: `ACTION_BAR`, `BOSS_BAR`, `CHAT` or `NONE`. |
+| **notify\_on\_attempt** | `true` | Tell a muted player, at most once every 30 seconds, when they try to talk. |
+
+Simple Voice Chat supports every **`block`** option. PlasmoVoice blocks all voice for a muted player.
+
+You can switch **`enforcement`** at any time. A mute VoiceSentinel already stored keeps being enforced and lifted after the switch. A LuckPerms deny from before 3.10 is still blocked, and `/voicesentinel pardon` lifts it. Switching to `LUCKPERMS` without LuckPerms installed turns mutes off (the console warns at start).
+
+Mute text (indicator, attempt notice, `/voicesentinel history` and `mutes`) is in `config/messages.yml`.
+
+## Mute ladder
+
+Escalating durations for **repeat** auto-mutes. Works with either enforcement mode.
 
 ```yaml
 mute_ladder:
@@ -125,7 +161,7 @@ Manual **`/voicesentinel vcmute`** mutes ignore the ladder. **`mute-duration-min
 
 ## Word lists and matching
 
-* **`config/wordlist.txt`** holds per-language **PROFANITY** (mild), **MODERATE** and **MUTE** (severe) sections. See [Word lists](word-lists.md).
+* **`config/wordlist.txt`** holds per-language **PROFANITY** (mild), **MODERATE** and **MUTE** (severe) sections, plus **ALLOW** for words that are never flagged. See [Word lists](word-lists.md).
 * **`profanity_words`** and **`mute-list`** in `config.yml` are extra words. They are **added** to the default-language lists from `wordlist.txt`. Empty `[]` means only the file is used. The old key **`profanity_list`** is accepted like **`profanity_words`**.
 
 After edits, run **`/voicesentinel reload`**.
@@ -162,6 +198,7 @@ audio_capture:
 | **monitor\_groups** | `true` | `false` = skip voice chat group chats. Proximity chat is still monitored. |
 | **live\_detection** | `true` | With the On-Server engine (ENGLISH profile, engine 1.1 or newer), stream audio while a player talks. See [On-Server Mode](on-server-mode.md#live-detection). |
 | **live\_chunk\_ms** | `200` | How often live audio is sent while talking (100 to 1000). |
+| **max\_utterance\_seconds** | `15` | Longest piece of speech sent in one go. Longer speech is split (5 to 60). |
 
 See [Performance and latency](#performance-and-latency) below and [Processor configuration](../voicesentinel-processor/configuration.md).
 
@@ -178,6 +215,19 @@ storage:
   username: ""
   password: ""
   ssl: false  # true = encrypt the connection (certificate is not verified)
+```
+
+## Data export
+
+Optional. Sends transcripts, flagged clips, mutes, strikes, reports and staff actions to your own MySQL or MariaDB database, for dashboards, ticket bots or appeal sites. Off by default. VoiceSentinel only writes to it. See [Data export](data-export.md) for the options and tables.
+
+{% hint style="warning" %}
+You are responsible for the player data you keep. Check your privacy policy and local law before you turn on transcripts or audio clips.
+{% endhint %}
+
+```yaml
+data_export:
+  enabled: false
 ```
 
 ## VoiceSentinel Cloud
@@ -266,7 +316,7 @@ Console commands when someone is **auto-muted** or when a hit does not mute. Pla
 
 ```yaml
 custom_commands:
-  mute_commands: ["say {player} has been flagged for inappropriate language!"]
+  mute_commands: ["say {player} was voice muted."]
   profanity_commands: []
   keyword_commands: {}
   auto_mute_builtin:
@@ -280,7 +330,7 @@ custom_commands:
 
 * **keyword\_commands**: per-word command lists. They run **first** when a mapped word is detected.
 * **mute\_commands** / **profanity\_commands**: global fallbacks when there is **no** keyword mapping for that word.
-* **auto\_mute\_builtin**: turns parts of the built-in auto-mute on or off. `luckperms_voice_mute: false` lets you mute with your own **mute\_commands** instead of LuckPerms.
+* **auto\_mute\_builtin**: turns parts of the built-in auto-mute on or off. `luckperms_voice_mute: false` turns the built-in mute off, so you mute with your own **mute\_commands** instead. The name is historical: with `mutes.enforcement: NATIVE` the built-in mute does not need LuckPerms.
 
 ## Discord (flagged content)
 
@@ -323,7 +373,9 @@ languages:
 
 ## Placeholder API
 
-**placeholder\_api**: integration hook. Leave **`enabled: false`** unless you use that feature.
+VoiceSentinel's own `%voicesentinel_...%` placeholders work whenever PlaceholderAPI is installed. See [Placeholders](placeholders.md).
+
+**placeholder\_api.enabled** (default `false`) is separate: `true` lets PlaceholderAPI placeholders be used inside VoiceSentinel's own messages.
 
 ## Performance and latency
 

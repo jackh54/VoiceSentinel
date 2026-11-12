@@ -20,7 +20,9 @@ local_engine:
 
 Restart the server. `/voicesentinel reload` also starts or stops the engine to match the mode.
 
-On the first start the plugin downloads the engine and the speech models from GitHub (release `engine-v1.1.0`). Each file is checked against a built-in SHA-256 hash. Files go to `plugins/VoiceSentinel/engine/`. Later starts reuse them.
+On a fresh install the plugin downloads the engine and the speech models by itself (engine 1.1.1). Each file is checked against a built-in SHA-256 hash. Files go to `plugins/VoiceSentinel/engine/`. Later starts reuse them. The download gives up cleanly if it fails, tells you what to do in the console, and Pool mode keeps working.
+
+If the server cannot download the engine, place the engine zip for your platform (for example `engine-linux-x64.zip`) in `plugins/VoiceSentinel/engine/` and restart. The plugin checks it against the same hash and installs it. A zip for a different plugin version is refused. Servers that share one plugin folder install the engine one at a time, not twice.
 
 The console shows `Speech engine: Starting`, then `Speech engine: Ready`. Voice moderation starts when the engine is ready.
 
@@ -76,7 +78,7 @@ In On-Server Mode the audio never leaves your server. It goes to the engine on `
 
 The plugin still contacts these hosts:
 
-* GitHub, to download the engine.
+* The engine and model download hosts, on a fresh install.
 * The PandaScript license server, to check your license and for [telemetry](configuration.md#telemetry-vendor-analytics).
 * `cloud.pandascript.dev`, only if you turn on [VoiceSentinel Cloud](voicesentinel-cloud.md).
 

@@ -16,7 +16,7 @@ Do not use Plugman or similar to reload the plugin.
 
 On start the plugin upgrades `config.yml` itself. It adds the blocks that are new and leaves your values alone. Your comments and layout stay as they are. The console says `Config migrated.` when something changed.
 
-`config-version` shows where the file is. Version 15 is the current one for 3.8.0. Each step adds:
+`config-version` shows where the file is. Version 17 is the current one for 3.10.1. Each step adds:
 
 | Version | Adds |
 |---------|------|
@@ -24,6 +24,10 @@ On start the plugin upgrades `config.yml` itself. It adds the blocks that are ne
 | 13 | `cloud` |
 | 14 | `moderation` and `storage` |
 | 15 | `audio_capture.live_detection` and `live_chunk_ms` |
+| 16 | Nothing new. Updates the default `mute_commands` text to "{player} was voice muted." if you never edited it |
+| 17 | `mutes`, `data_export` and `audio_capture.max_utterance_seconds` |
+
+`messages.yml` has its own `config-version` (now 2). Version 2 adds the keys for mutes, staff tools, the license and `/voicesentinel test`. Migrations add missing keys and keep your edits.
 
 Do not edit `config-version`.
 
@@ -33,7 +37,7 @@ New defaults only apply to new installs. An upgraded config keeps what it had. F
 
 ## The speech engine
 
-In [On-Server Mode](on-server-mode.md), the engine is pinned to a version in each plugin release. 3.8.0 uses engine 1.1.0. If the installed engine is older, the plugin downloads the new one on the next start. You do not need to do anything.
+In [On-Server Mode](on-server-mode.md), the engine is pinned to a version in each plugin release. 3.10.1 uses engine 1.1.1. If the installed engine is older, the plugin downloads the new one on the next start. You do not need to do anything. If the server cannot download, place the engine zip by hand (see On-Server Mode).
 
 PUBLIC and CUSTOM modes do not use the engine. A self-hosted processor is updated separately.
 
@@ -53,7 +57,15 @@ To move to the new list yourself:
 
 See [Word lists](word-lists.md).
 
-## What is new in 3.8.0
+## What is new in 3.9 and 3.10
+
+* **3.10:** built-in [voice mutes](moderation-and-escalation.md#voice-mutes) with no LuckPerms needed. Upgrades get `mutes.enforcement: NATIVE` and `mirror_luckperms: false`. Your `disable-listening-on-mute` value is copied to `mutes.listen`.
+* **3.10:** `/voicesentinel pardon`, `history`, `mutes`, `vcmute ... [reason]` and `license`; `/voicesentinel test` is now a setup checker. See [Commands and permissions](commands-and-permissions.md).
+* **3.10:** `[XX-ALLOW]` word list sections, [placeholders](placeholders.md) and optional [data export](data-export.md).
+* **3.10.1:** `vcmute` and `unvcmute` work on offline players.
+* **3.9:** faster, more reliable engine setup on fresh installs.
+
+## What was new in 3.8.0
 
 * [Live detection](on-server-mode.md#live-detection) in On-Server Mode.
 * New default word list with whole-word matching and a filled moderate tier.

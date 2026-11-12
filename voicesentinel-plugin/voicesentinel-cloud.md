@@ -15,7 +15,7 @@ It is off until you turn it on.
 * **Incidents.** Every flag and mute from every server on your license, in one feed. Each one has the transcript, the matched words, the tier and strike, and whether it was unconfirmed. You can search and filter by server.
 * **Clips.** A short audio clip of the flagged moment, when `cloud.upload_clips` is on.
 * **Discord bot.** Incidents are posted to a staff channel with **Unmute**, **Extend 1h** and **Dismiss** buttons. The server applies the action within seconds.
-* **Remote unmute and extend.** Done from Discord or from the dashboard. The plugin polls for them. Unmute and extend need LuckPerms.
+* **Remote unmute and extend.** Done from Discord or from the dashboard. The plugin polls for them. They work with either mute enforcement mode (LuckPerms is only needed with `mutes.enforcement: LUCKPERMS`).
 * **Appeals.** A muted player gets a private link that shows what was heard and the mute length. The player can write a message (up to 1000 characters). Staff approve or deny it in Discord or the dashboard. Approving an appeal unmutes the player on all your servers.
 
 Incidents, clips and appeals are deleted after 30 days.

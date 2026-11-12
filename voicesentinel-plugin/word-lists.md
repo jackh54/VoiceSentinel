@@ -13,10 +13,13 @@ The file is split into sections by **language** and **tier**. Put one word or ph
 | **`[XX-PROFANITY]`** | mild | Swearing that is not aimed at anyone | report, then warn, then mute |
 | **`[XX-MODERATE]`** | moderate (optional) | Insults, harassment and threats aimed at a person | warn, then mute |
 | **`[XX-MUTE]`** | severe | Slurs, hate and telling someone to harm themselves | mute straight away |
+| **`[XX-ALLOW]`** | none | Words that are never flagged | nothing |
 
 What each tier does, and how it escalates when a player repeats it, is set in the `moderation` block of **`config.yml`**. See [Moderation and escalation](moderation-and-escalation.md).
 
 `XX` is the language code, for example **`[EN-PROFANITY]`** or **`[ES-MUTE]`**. A heading without a language (**`[MUTE]`**) means English. The default file has sections for en, es, fr, de, pt, it, ru, ja and ar. Add other languages with your own **`[XX-...]`** sections.
+
+Words in an **`[XX-ALLOW]`** section (any language) are never flagged. They are removed from every other list, so use them for false positives such as a player name or a local word that sounds like a listed one. The default file has an empty **`[EN-ALLOW]`** section.
 
 Example:
 

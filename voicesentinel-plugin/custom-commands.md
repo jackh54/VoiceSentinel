@@ -14,7 +14,7 @@ Keyword keys should match entries in **wordlist.txt**, **`mute-list`**, or **`pr
 
 ## mute\_commands
 
-Run **once** after a **successful auto-mute** (`flag_threshold` reached, the escalation step is `mute`, built-in mute applied). If auto-mute cannot run (for example LuckPerms is missing while **`auto_mute_builtin.luckperms_voice_mute`** is `true`), these commands do not fire. With `luckperms_voice_mute: false`, the built-in mute is skipped and these commands are how you mute. See [Moderation and escalation](moderation-and-escalation.md).
+Run **once** after a **successful auto-mute** (`flag_threshold` reached, the escalation step is `mute`, built-in mute applied). If auto-mute cannot run (for example `mutes.enforcement` is `LUCKPERMS` and LuckPerms is missing, while **`auto_mute_builtin.luckperms_voice_mute`** is `true`), these commands do not fire. With `luckperms_voice_mute: false`, the built-in mute is skipped and these commands are how you mute. See [Moderation and escalation](moderation-and-escalation.md).
 
 ## profanity\_commands
 

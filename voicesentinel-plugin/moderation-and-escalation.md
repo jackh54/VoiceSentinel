@@ -46,7 +46,7 @@ Each list is a ladder of steps. A player's first strike in a tier uses step 1, t
 |------|--------------|
 | **report** | Staff alerts, Discord webhooks and [custom commands](custom-commands.md) only. Nothing is sent to the player. |
 | **warn** | Sends `warn_message` to the player. Staff alerts and commands run too. |
-| **mute** | Voice-mutes the player. Needs LuckPerms. The length comes from the [mute ladder](#mute-ladder). |
+| **mute** | Voice-mutes the player. The length comes from the [mute ladder](#mute-ladder). Needs LuckPerms only if `mutes.enforcement` is `LUCKPERMS`. |
 
 Strikes are counted per player and per tier. Only strikes inside the last `window_minutes` count. A mild strike does not count towards a moderate or severe ladder.
 
@@ -56,7 +56,7 @@ With `escalation.enabled: false` every hit uses the first step of its tier.
 
 A strike is counted only after `flag_threshold` is reached for the session. A warn needs the player to be online.
 
-If the player has left by the time a mute runs, VoiceSentinel still mutes them through LuckPerms when it knows their UUID. If it does not, the hit is only reported.
+If the player has left by the time a mute runs, VoiceSentinel still mutes them when it knows their UUID. If it does not, the hit is only reported.
 
 ## Unconfirmed hits
 
@@ -78,6 +78,16 @@ With [MySQL or MariaDB storage](storage.md), strikes are saved in the shared dat
 Give each server its own `network_sync.server_id` (or `server_name`). VoiceSentinel uses it to tell the servers apart. Set `network_strikes: false` to count only strikes from this server.
 
 With SQLite storage, strikes stay on the server. If the database cannot be reached, strikes are counted in memory until it is back.
+
+## Voice mutes
+
+Since 3.10 VoiceSentinel blocks muted players itself (`mutes.enforcement: NATIVE`), so LuckPerms is optional. Set `mutes.enforcement: LUCKPERMS` to have LuckPerms and the voice mod enforce it instead.
+
+By default a muted player cannot talk by proximity, whisper or in groups, and can still hear others. The `mutes` block in [Configuration](configuration.md#voice-mutes-mutes) changes that: which of proximity, whisper and groups are blocked, groups they may still use, whether they stop hearing others, and whether LuckPerms also gets a deny node.
+
+A muted player sees a "Voice muted" line with the time left (action bar by default) and is told, at most every 30 seconds, when they try to talk.
+
+Staff tools: `/voicesentinel vcmute <player> <duration|perm> [reason]`, `unvcmute`, `pardon` (unmute, clear strikes, reset the ladder), `history` and `mutes`. See [Commands and permissions](commands-and-permissions.md). Every mute, unmute and strike can also be sent to your own database with [Data export](data-export.md).
 
 ## Mute ladder
 

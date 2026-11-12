@@ -11,7 +11,7 @@ You need a few things in place before the plugin will work:
 * **Paper or Folia 1.21+** (Bukkit/Spigot is not supported)
 * **Java 21**
 * **Simple Voice Chat** or **PlasmoVoice** (the voice mod players use). Install one, not both.
-* **LuckPerms** for automatic voice mutes. Without it the plugin starts, but the built-in mute is off.
+* **LuckPerms** is optional. Voice mutes work without it. It is only needed if you set `mutes.enforcement: LUCKPERMS` or `mutes.mirror_luckperms: true`.
 * A **license key**. See [Getting your license key](getting-your-license-key.md).
 
 Drop **`VoiceSentinel.jar`** into **`plugins/`** and restart. On first start it creates **`plugins/VoiceSentinel/`** with **`config.yml`**. Word lists and messages are in **`plugins/VoiceSentinel/config/`** (`wordlist.txt`, `messages.yml`, `languages.yml`).
@@ -23,7 +23,7 @@ VoiceSentinel turns speech into text with a processor. You choose where it runs 
 | Mode | Where speech is processed | Setup | Audio leaves your server |
 |------|---------------------------|-------|--------------------------|
 | **PUBLIC** (default) | Shared PandaScript pool | None | Yes, to the pool |
-| **LOCAL** | On your Minecraft server (On-Server Mode) | None, no Docker. The engine downloads on first start | No |
+| **LOCAL** | On your Minecraft server (On-Server Mode) | None, no Docker. The engine downloads automatically on first start | No |
 | **CUSTOM** | A processor you run yourself | Install the [processor](../voicesentinel-processor/installation.md), set URL and key | Only to your processor |
 
 ### LOCAL (On-Server Mode)
@@ -38,7 +38,7 @@ local_engine:
 * **ENGLISH** needs about 1 GB of free RAM. It checks every hit twice and supports live detection.
 * **MULTILANG** supports many languages, checks once, and needs about 2.5 GB of free RAM.
 
-On first start the plugin downloads the engine and models from GitHub. This needs internet access and disk space. See [On-Server Mode](on-server-mode.md).
+On first start the plugin downloads the engine and models by itself. This needs internet access and disk space. If the server cannot download, you can place the engine file by hand. See [On-Server Mode](on-server-mode.md#turn-it-on).
 
 ### PUBLIC pool
 
@@ -64,7 +64,7 @@ Set **`processor_websocket_url`** to your processor (for example `ws://192.168.1
 {% step %}
 ### Add your license key
 
-Put your **license key** in **`config.yml`**. See [Getting your license key](getting-your-license-key.md).
+Put your **license key** in **`config.yml`**, or start the server without it and run **`/voicesentinel license <key>`**. See [Getting your license key](getting-your-license-key.md).
 {% endstep %}
 
 {% step %}
@@ -84,7 +84,7 @@ The default is a join notice. You can ask players to accept in a menu instead. S
 
 Restart the server. After the first start, **`/voicesentinel reload`** applies config changes. In LOCAL mode, wait for `Speech engine: Ready` in the console.
 
-Run **`/voicesentinel test`** to check the mode and the speech link.
+Run **`/voicesentinel test`** to check your whole setup: speech link, license, voice chat mod, engine and more.
 {% endstep %}
 {% endstepper %}
 
