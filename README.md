@@ -225,6 +225,10 @@ See LICENSE file for details.
 
 ## Changelog
 
+### Plugin 3.10.1
+- `/vs vcmute` and `/vs unvcmute` now work on offline players. A mute applies as soon as they join, and you can unmute someone without waiting for them to come online
+- Players can be named with or without the Bedrock `.` prefix, or by UUID
+
 ### Plugin 3.10.0
 - Built-in voice mutes: VoiceSentinel now blocks muted players itself, so LuckPerms is no longer needed. New `mutes:` options set what a muted player can't use (proximity, whisper, groups, or all but named groups) and whether they can still hear others
 - Muted players see how long they have left and are told when they try to talk
