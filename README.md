@@ -225,6 +225,10 @@ See LICENSE file for details.
 
 ## Changelog
 
+### Plugin 3.10.2
+- Bedrock players (through Geyser and Floodgate) now get a native Bedrock form for the voice chat rules in `consent.mode: GUI`. Before, the menu could be invisible to them and stop them from interacting until they relogged
+- Java players see the rules menu a moment after joining instead of instantly
+
 ### Plugin 3.10.1
 - `/vs vcmute` and `/vs unvcmute` now work on offline players. A mute applies as soon as they join, and you can unmute someone without waiting for them to come online
 - Players can be named with or without the Bedrock `.` prefix, or by UUID
