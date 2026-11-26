@@ -225,6 +225,10 @@ See LICENSE file for details.
 
 ## Changelog
 
+### Plugin 3.11.0
+- New `consent.on_deny: MUTE` for `consent.mode: GUI`. A player who denies the voice chat rules stays on the server and can hear voice chat, but nobody hears them until they accept. Works with Simple Voice Chat and PlasmoVoice
+- New `consent.muted_message`, sent to players who deny in MUTE mode. Existing configs get it automatically (config-version 18)
+
 ### Plugin 3.10.2
 - Bedrock players (through Geyser and Floodgate) now get a native Bedrock form for the voice chat rules in `consent.mode: GUI`. Before, the menu could be invisible to them and stop them from interacting until they relogged
 - Java players see the rules menu a moment after joining instead of instantly
