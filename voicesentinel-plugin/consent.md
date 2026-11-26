@@ -21,6 +21,7 @@ In both modes `privacy-join-msg` and `privacy-msg` control the join notice.
 consent:
   mode: NOTICE
   # GUI mode, when a player denies. IGNORE = they stay, voice not processed. KICK = removed.
+  # MUTE = they stay and can listen, but nobody hears them until they accept.
   on_deny: IGNORE
   # Raise this after changing your rules to ask everyone again.
   rules_version: 1
@@ -34,6 +35,7 @@ consent:
     - "&7against the server rules."
   accepted_message: "&aAccepted. Voice chat is enabled."
   denied_message: "&eDeclined. Your voice is not processed. Change this with /voiceconsent."
+  muted_message: "&eDeclined. You can hear voice chat, but nobody can hear you. Change this with /voiceconsent."
   kick_message: "&cYou must accept the voice chat rules to play on this server."
   notice_mode_message: "&7Voice chat is moderated. Your voice is converted to text and checked."
 ```
@@ -48,6 +50,7 @@ A new player gets a menu with three items: accept, the rules (a book with the li
 * **Accept**: voice is moderated.
 * **Deny** with `on_deny: IGNORE`: the player stays on the server. Their voice is not processed.
 * **Deny** with `on_deny: KICK`: the player is removed with `kick_message`. They get the menu again on their next join.
+* **Deny** with `on_deny: MUTE` (3.11+): the player stays and hears voice chat, but nobody hears them. They get `muted_message`. Players who have not answered yet are muted too, so nobody talks unmoderated while the menu is open. Works with Simple Voice Chat and PlasmoVoice.
 
 Answers are saved in `plugins/VoiceSentinel/consent.properties`.
 

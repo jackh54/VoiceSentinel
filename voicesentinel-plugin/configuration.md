@@ -69,7 +69,7 @@ The **`consent`** block sets whether joining counts as consent (**NOTICE**) or p
 | Option | Default | Description |
 |--------|---------|-------------|
 | **consent.mode** | `NOTICE` | `NOTICE` or `GUI`. |
-| **consent.on\_deny** | `IGNORE` | GUI mode. `IGNORE` = player stays, voice not processed. `KICK` = player is removed. |
+| **consent.on\_deny** | `IGNORE` | GUI mode. `IGNORE` = player stays, voice not processed. `KICK` = player is removed. `MUTE` (3.11+) = player stays and can listen, but cannot speak until they accept. |
 | **consent.rules\_version** | `1` | Raise to ask everyone again. |
 | **privacy-join-msg** | `true` | Show **privacy-msg** to players when they join. |
 | **privacy-msg** | (text) | The notice. Supports `&` colour codes. |
